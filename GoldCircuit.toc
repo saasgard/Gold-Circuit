@@ -1,0 +1,27 @@
+## Interface: 120105
+## Title: Gold Circuit
+## Notes: Weekly caches, world quests, Special Assignments, events and crafting orders tracked across your whole alt army, with route planning, navigation and a cashflow ledger.
+## Author: Skeide
+## Version: 1.0.0
+## Category: Economy
+## IconTexture: Interface\AddOns\GoldCircuit\Media\icon
+## SavedVariables: GoldCircuitDB
+## OptionalDeps: Auctionator, TradeSkillMaster
+## AddonCompartmentFunc: GoldCircuit_OnAddonCompartmentClick
+## AddonCompartmentFuncOnEnter: GoldCircuit_OnAddonCompartmentEnter
+## AddonCompartmentFuncOnLeave: GoldCircuit_OnAddonCompartmentLeave
+## X-License: MIT
+## X-Category: Economy
+## X-Curse-Project-ID: 1767461
+
+
+Data.lua
+Core.lua
+Style.lua
+WorldQuests.lua
+Travel.lua
+Orders.lua
+Pickups.lua
+Route.lua
+UI.lua
+WQWindow.lua

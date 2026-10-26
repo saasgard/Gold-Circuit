@@ -1,0 +1,2 @@
+# release zips are built from the code, not kept in it
+*.zip
