@@ -1,0 +1,27 @@
+# Builds the addon zip (BigWigs packager, using .pkgmeta) and uploads it to
+# CurseForge and a GitHub release whenever a version tag is pushed:
+#   git tag -a v1.0.2 -m "1.0.2"; git push origin v1.0.2
+# Tags with "alpha" or "beta" in them are uploaded as alpha / beta files.
+# CurseForge needs the CF_API_KEY repository secret; the project comes from
+# X-Curse-Project-ID in GoldCircuit.toc.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the GitHub release
+    env:
+      CF_API_KEY: ${{ secrets.CF_API_KEY }}
+      GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the packager reads tags and history
+
+      - uses: BigWigsMods/packager@v2

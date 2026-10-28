@@ -12,4 +12,6 @@ ignore:
   - CURSEFORGE.md
   - .git
   - .github
+  - .gitignore
+  - .gitattributes
   - "*.zip"
