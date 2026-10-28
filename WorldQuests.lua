@@ -641,6 +641,7 @@ function WQ.IsWatched(qid)
 end
 
 local PIN_AREAPOI = (Enum and Enum.SuperTrackingMapPinType and Enum.SuperTrackingMapPinType.AreaPOI) or 0
+WQ.PIN_AREAPOI = PIN_AREAPOI
 
 function WQ.IsSuperTracked(qid)
   if qid < 0 then
@@ -939,6 +940,16 @@ local function IsHub(a, name)
   return false
 end
 
+function WQ.POIScore(info, mi, x, y)
+  local T = Enum and Enum.UIMapType or {}
+  local s = info.isPrimaryMapForPOI and 1000 or 0
+  if mi and (mi.mapType == T.City or mi.mapType == T.Micro) then s = s + 300
+  elseif mi and mi.mapType == T.Zone then s = s + 200
+  elseif mi and mi.mapType == T.Continent then s = s - 500 end
+  local dx, dy = x - 0.5, y - 0.5
+  return s - (dx * dx + dy * dy) * 100
+end
+
 -- Only while an event (Aqir) is tracked, unless asked for (force).
 function WQ.ScanEventPOIs(force)
   local DB = ns.DB
@@ -953,14 +964,7 @@ function WQ.ScanEventPOIs(force)
   local now = time()
   local T = Enum and Enum.UIMapType or {}
   local events, hubs = {}, {}
-  local function Score(info, mi, x, y)
-    local s = info.isPrimaryMapForPOI and 1000 or 0
-    if mi and (mi.mapType == T.City or mi.mapType == T.Micro) then s = s + 300
-    elseif mi and mi.mapType == T.Zone then s = s + 200
-    elseif mi and mi.mapType == T.Continent then s = s - 500 end
-    local dx, dy = x - 0.5, y - 0.5
-    return s - (dx * dx + dy * dy) * 100
-  end
+  local Score = WQ.POIScore
   for mapID, mapName in pairs(WQ.FindMaps()) do
     local ids, seen = {}, {}
     for _, fn in ipairs({ C_AreaPoiInfo.GetAreaPOIForMap, C_AreaPoiInfo.GetEventsForMap }) do
@@ -1052,18 +1056,45 @@ local function EventActivity(poiID)
   poiMiss[poiID] = true -- some other event
 end
 
--- Where an event is: its map, the spot on it and the zone name.
+-- Where an event is: its map, the spot on it and the zone name. The Events
+-- tab often gives no map (Abundance, Aqir), and a marker also shows on the
+-- zones next to it, so every map it's on is scored like ScanEventPOIs does
+-- (its own map wins, not a neighbour's edge). A marker that isn't up has no
+-- position: then the spot it had last time (DB.eventPOIPos, grottos don't
+-- move), else a built-in one (ns.EVENT_SPOTS), else only the zone.
 local function EventSpotFor(poiID, name)
   local ES = C_EventScheduler
+  local DB = ns.DB
+  DB.eventPOIPos = DB.eventPOIPos or {}
+  local okZ, zone = pcall(ES.GetEventZoneName, poiID)
+  zone = okZ and type(zone) == "string" and zone ~= "" and zone or nil
   local okM, map = pcall(ES.GetEventUiMapID, poiID)
   map = okM and type(map) == "number" and map or nil
-  if not map then return end
-  local ok, info = pcall(C_AreaPoiInfo.GetAreaPOIInfo, map, poiID)
-  if not (ok and info and info.position) then return end
-  local okZ, zone = pcall(ES.GetEventZoneName, poiID)
-  local mi = C_Map.GetMapInfo(map)
-  return { poiID = poiID, map = map, mx = info.position.x, my = info.position.y, name = info.name or name,
-    label = info.name or name, zone = (okZ and type(zone) == "string" and zone) or (mi and mi.name) or "?", t = time() }
+  local maps = {}
+  for mapID in pairs(WQ.FindMaps()) do maps[#maps + 1] = mapID end
+  if map then maps[#maps + 1] = map end
+  local info, best
+  for _, mapID in ipairs(maps) do
+    local ok, i = pcall(C_AreaPoiInfo.GetAreaPOIInfo, mapID, poiID)
+    if ok and i and i.position then
+      local mi = C_Map.GetMapInfo(mapID)
+      local score = WQ.POIScore(i, mi, i.position.x, i.position.y)
+      if zone and mi and WQ.SameZone(mi.name, zone) then score = score + 500 end
+      if not best or score > best then best, info, map = score, i, mapID end
+    end
+  end
+  local pos = info and { map = map, x = info.position.x, y = info.position.y, name = info.name }
+  if pos then DB.eventPOIPos[poiID] = pos else pos = DB.eventPOIPos[poiID] end
+  if not pos then
+    local b = ns.EVENT_SPOTS[poiID]
+    if b then pos = { map = b[1], x = b[2], y = b[3], name = b[4] } end
+  end
+  map = (pos and pos.map) or map
+  local mi = map and C_Map.GetMapInfo(map)
+  if not (map or zone) then return end
+  local label = (info and info.name) or (pos and pos.name) or name
+  return { poiID = poiID, map = map, mx = pos and pos.x, my = pos and pos.y, name = label,
+    label = label, zone = zone or (mi and mi.name) or "?", t = time() }
 end
 
 -- Is the event's marker on its map right now? nil = can't tell.
@@ -1119,7 +1150,7 @@ function WQ.ScanScheduler()
       if e.startTime <= now and e.endTime > now then
         s.window, s.ends, s.poiID = true, e.endTime, s.poiID or e.areaPoiID
       elseif e.startTime > now and (not s.nextStart or e.startTime < s.nextStart) then
-        s.nextStart, s.nextEnd = e.startTime, e.endTime
+        s.nextStart, s.nextEnd, s.nextPoi = e.startTime, e.endTime, e.areaPoiID
         s.hasReminder = e.hasReminder and true or false
       end
     end
@@ -1139,7 +1170,9 @@ function WQ.ScanScheduler()
   ns.DB.eventSpots = ns.DB.eventSpots or {}
   for key, s in pairs(out) do
     local a = ns.ACT_BY_KEY[key]
-    local poi = s.poiID or s.anyPoi
+    -- the running one, else the next to start (the list can still hold
+    -- ended ones, e.g. last week's zone)
+    local poi = s.poiID or s.nextPoi or s.anyPoi
     if a.eventTab and poi then
       local spot = EventSpotFor(poi, a.name)
       if spot then
@@ -1163,6 +1196,99 @@ function WQ.EventSpot(a)
   if not spot then return end
   if spot.ends then return spot.ends > time() and spot or nil end
   if time() - (spot.t or 0) < 86400 then return spot end
+end
+
+-- What you're pointing at on the map: a marker you clicked (super-tracked
+-- area POI, e.g. Saltheril's Soiree), a tracked quest, or a placed pin.
+-- { map, x, y, name, what } or nil.
+local function UserWaypoint()
+  local w = C_Map.HasUserWaypoint and C_Map.HasUserWaypoint() and C_Map.GetUserWaypoint()
+  if w and w.uiMapID and w.position then
+    return { map = w.uiMapID, x = w.position.x, y = w.position.y, what = "map pin" }
+  end
+end
+
+local function AreaPOIPoint(poiID)
+  local maps = {}
+  if WorldMapFrame and WorldMapFrame.GetMapID then maps[#maps + 1] = WorldMapFrame:GetMapID() end
+  if C_Map.GetBestMapForUnit then maps[#maps + 1] = C_Map.GetBestMapForUnit("player") end
+  for mapID in pairs(WQ.FindMaps()) do maps[#maps + 1] = mapID end
+  local best, out
+  for _, mapID in ipairs(maps) do
+    local ok, i = pcall(C_AreaPoiInfo.GetAreaPOIInfo, mapID, poiID)
+    if ok and i and i.position then
+      local score = WQ.POIScore(i, C_Map.GetMapInfo(mapID), i.position.x, i.position.y)
+      if not best or score > best then
+        best, out = score, { map = mapID, x = i.position.x, y = i.position.y, name = i.name, poiID = poiID, what = "map marker" }
+      end
+    end
+  end
+  return out
+end
+
+local function PointedAt()
+  local ST = C_SuperTrack
+  if ST and ST.IsSuperTrackingUserWaypoint and ST.IsSuperTrackingUserWaypoint() then
+    local w = UserWaypoint()
+    if w then return w end
+  end
+  if ST and ST.GetSuperTrackedMapPin then
+    local ok, pinType, pinID = pcall(ST.GetSuperTrackedMapPin)
+    if ok and pinID then
+      if pinType == PIN_AREAPOI then
+        local p = AreaPOIPoint(pinID)
+        if p then return p end
+      end
+      local e = ns.DB.wq[-pinID] -- locked Special Assignment
+      if e and e.map and e.mx then return { map = e.map, x = e.mx, y = e.my, name = e.title, what = "map marker" } end
+    end
+  end
+  local qid = ST and ST.GetSuperTrackedQuestID and ST.GetSuperTrackedQuestID()
+  if qid and qid > 0 and C_QuestLog.GetNextWaypoint then
+    local m, x, y = C_QuestLog.GetNextWaypoint(qid)
+    if m and x and y then
+      return { map = m, x = x, y = y, name = C_QuestLog.GetTitleForQuestID(qid), what = "tracked quest" }
+    end
+  end
+  return UserWaypoint()
+end
+
+-- /gc pin [activity]: print what you're pointing at on the map; with an
+-- activity, use it as that activity's spot: the spot of its current event
+-- (Events-tab activities, e.g. this week's Abundance grotto), otherwise
+-- where its weekly is picked up.
+function WQ.PinReport(a)
+  local p = PointedAt()
+  if not p then ns.Warn("Nothing marked. Click a marker on the world map, or Ctrl-click to place a pin.") return end
+  local mi = C_Map.GetMapInfo(p.map)
+  local zone = mi and mi.name or "?"
+  ns.Print(string.format("%s%s: %s (map %d) %.1f, %.1f%s", p.what:sub(1, 1):upper() .. p.what:sub(2),
+    p.name and (" \"" .. p.name .. "\"") or "", zone, p.map, p.x * 100, p.y * 100,
+    p.poiID and (" (marker " .. p.poiID .. ")") or ""))
+  if not a then return end
+  if not a.eventTab then
+    if not ns.Pickups.SetManual(a, p.map, p.x, p.y, p.name or "map pin") then
+      ns.Warn(a.name .. " has no pickup spot (it isn't picked up from a quest giver).")
+      return
+    end
+    ns.Print(string.format("Saved as where %s is picked up.", a.name))
+    ns.Refresh()
+    return
+  end
+  local spot = ns.DB.eventSpots and ns.DB.eventSpots[a.key]
+  if not (spot and spot.poiID) then
+    ns.Warn(a.name .. ": no event from the map's Events tab to attach it to (open the Events tab, then try again).")
+    return
+  end
+  local name = spot.name or a.name
+  ns.DB.eventPOIPos = ns.DB.eventPOIPos or {}
+  ns.DB.eventPOIPos[spot.poiID] = { map = p.map, x = p.x, y = p.y, name = name }
+  spot.map, spot.mx, spot.my = p.map, p.x, p.y
+  spot.zone = zone ~= "?" and zone or spot.zone
+  ns.DB.zones[a.key] = spot.zone
+  ns.Print(string.format("Saved as the spot for %s (event %d).", name, spot.poiID))
+  print(string.format("  [%d] = { %d, %.3f, %.3f, \"%s\" },", spot.poiID, p.map, p.x, p.y, name))
+  ns.Refresh()
 end
 
 -- Fresh Events-tab data for an activity, or nil (then the addon falls back

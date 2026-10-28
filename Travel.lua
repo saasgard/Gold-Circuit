@@ -538,7 +538,7 @@ end
 -- Label for a map pin the addon placed (e.g. "Pick up: Harandar").
 local goalLabel
 function Travel.SetGoalLabel(label, p)
-  goalLabel = { label = label, map = p.map, mx = p.mx, my = p.my }
+  goalLabel = { label = label, map = p.map, mx = p.mx, my = p.my, pinID = p.pinID }
 end
 
 function Travel.Goal()
@@ -550,6 +550,12 @@ function Travel.Goal()
       if e and e.map and e.mx then
         local g = MapPointToWorld(e.map, e.mx, e.my, e.zone)
         if g then g.label = e.title or "Special Assignment"; g.zone = e.zone or g.zone; return g end
+      end
+      -- an event marker or quest offer the addon tracked (Aqir, Runestones)
+      local L = goalLabel
+      if L and L.pinID == pinID then
+        local g = MapPointToWorld(L.map, L.mx, L.my)
+        if g then g.label = L.label; return g end
       end
     end
   end

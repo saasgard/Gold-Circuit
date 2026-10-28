@@ -1,0 +1,15 @@
+# Packaging for CurseForge / Wago (BigWigs packager).
+# The zip contains a single "GoldCircuit" folder with the addon files.
+package-as: GoldCircuit
+
+manual-changelog:
+  filename: CHANGELOG.md
+  markup-type: markdown
+
+ignore:
+  - .pkgmeta
+  - Branding
+  - CURSEFORGE.md
+  - .git
+  - .github
+  - "*.zip"

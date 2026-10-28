@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.1
+
+### Fixes
+- Abundance: only "Abundant Offerings" counts. The intro chain (The Abundant Life) and the grotto quests no longer show it as done or in your log.
+- Abundance: this week's grotto is found even when the map's Events tab gives no map for it, on its own zone instead of a neighbouring one. Last week's quest giver is no longer used after the reset.
+- Aqir: directions go to the invasion marker on the map, not to the Aqir Researchers in Silvermoon.
+- Runestones: no longer marked done just by picking up the quest. Claiming Saltheril's Soiree's reward no longer marks the Apex Cache done.
+- Map pins are placed on the version of the zone you're actually on (Eversong Woods has two).
+
+### Changes
+- Clicking a weekly tracks its quest offer when the quest giver is known, so the game's own arrow guides you there, through portals from another zone too (Runestones, Abundance).
+- Gold from Special Assignment caches (Fabled Coiled Isle Veteran's Cache and the others) has its own "Special Assignment" line in the cashflow instead of "Weekly Cache".
+- New **/gc pin [activity]**: shows the marker or pin you clicked on the map; with an activity, saves it as that activity's spot.
+
 ## 1.0.0 — first public release
 
 Gold Circuit tracks every gold-paying activity across your whole alt army in World of Warcraft: Midnight, plans the best route for the character you're on, and keeps a detailed cashflow ledger.

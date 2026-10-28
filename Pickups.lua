@@ -42,7 +42,10 @@ end
 local function Store(key, p)
   ns.DB.pickups = ns.DB.pickups or {}
   local cur = ns.DB.pickups[key]
-  if cur and (RANK[cur.source] or 0) > (RANK[p.source] or 0) then return false end
+  local a = ns.ACT_BY_KEY[key]
+  local stale = cur and a and a.pickupMoves and (cur.t or 0) < ns.NextReset() - 604800
+  if cur and not stale and (RANK[cur.source] or 0) > (RANK[p.source] or 0) then return false end
+  p.t = time()
   ns.DB.pickups[key] = p
   return true
 end
@@ -159,11 +162,26 @@ end
 -- Accepting a weekly from an NPC.
 function P.LearnAt() P.OnNPC() end
 
+-- /gc pin <activity>: the spot you marked is where it's picked up (ranked
+-- like talking to the NPC, so map scans don't replace it).
+function P.SetManual(a, map, mx, my, label)
+  if not (Eligible(a) or a.mapEvent) then return false end
+  local p = Point(map, mx, my)
+  if not p then return false end
+  p.source, p.label = "npc", label
+  ns.DB.pickups = ns.DB.pickups or {}
+  ns.DB.pickups[a.key] = nil -- replace whatever was there
+  Store(a.key, p)
+  return true
+end
+
 -- { map, mx, my, zone, cont, x, y, source, label } or nil
 -- A learned spot, else the built-in one from Data.lua (a.pickup).
 local builtin = {}
 function P.For(a)
   local p = ns.DB.pickups and ns.DB.pickups[a.key]
+  -- Abundance's quest giver moves with the zone: only this week's counts
+  if p and a.pickupMoves and (p.t or 0) < ns.NextReset() - 604800 then p = nil end
   if p or not a.pickup then return p end
   if not builtin[a.key] then
     local b = Point(a.pickup[1], a.pickup[2], a.pickup[3])
@@ -187,6 +205,10 @@ local ARRIVED = 15 -- yards
 local placed, arrivalTicker
 
 local function OurPinUp()
+  if placed and placed.pinID then
+    local ok, _, id = pcall(C_SuperTrack.GetSuperTrackedMapPin)
+    return ok and id == placed.pinID or false
+  end
   if not (placed and C_Map.HasUserWaypoint and C_Map.HasUserWaypoint() and C_Map.GetUserWaypoint) then return false end
   local w = C_Map.GetUserWaypoint()
   return w and w.uiMapID == placed.map and w.position
@@ -195,8 +217,12 @@ end
 
 function P.ClearPin(why)
   if arrivalTicker then arrivalTicker:Cancel(); arrivalTicker = nil end
-  if OurPinUp() and C_Map.ClearUserWaypoint then
-    C_Map.ClearUserWaypoint()
+  if OurPinUp() then
+    if placed.pinID then
+      if C_SuperTrack.ClearSuperTrackedMapPin then C_SuperTrack.ClearSuperTrackedMapPin() end
+    elseif C_Map.ClearUserWaypoint then
+      C_Map.ClearUserWaypoint()
+    end
     if why and ns.DB.settings.announce then ns.Print("Map pin removed (" .. why .. ").") end
     ns.Refresh()
   end
@@ -209,15 +235,83 @@ local function CheckArrival()
   if d and d <= ARRIVED then P.ClearPin("you're there") end
 end
 
-local function Pin(p, label, key)
-  if C_Map.SetUserWaypoint and UiMapPoint then
-    C_Map.SetUserWaypoint(UiMapPoint.CreateFromCoordinates(p.map, p.mx, p.my))
-    if C_SuperTrack and C_SuperTrack.SetSuperTrackedUserWaypoint then C_SuperTrack.SetSuperTrackedUserWaypoint(true) end
-    if arrivalTicker then arrivalTicker:Cancel() end
-    placed = { map = p.map, mx = p.mx, my = p.my, key = key, point = Point(p.map, p.mx, p.my) }
-    arrivalTicker = C_Timer.NewTicker(1, CheckArrival)
+-- Tracks something on the map itself, like clicking it there: an event
+-- marker (Aqir, an Abundance grotto) or a quest offer ("!"). Quest offers
+-- get the game's arrow from another zone too (through portals).
+local function TrackMapPin(pinType, id)
+  if not (pinType and id and C_SuperTrack and C_SuperTrack.SetSuperTrackedMapPin) then return false end
+  local ok = pcall(C_SuperTrack.SetSuperTrackedMapPin, pinType, id)
+  if not ok then return false end
+  local okG, t, got = pcall(C_SuperTrack.GetSuperTrackedMapPin)
+  return okG and t == pinType and got == id
+end
+
+-- The weekly's quest to track as an offer: the one the quest giver offered
+-- (other known IDs may not be offered this week).
+local function OfferQuest(p)
+  local done = C_QuestLog.IsQuestFlaggedCompleted
+  if p.qid and not (done and done(p.qid)) then return p.qid end
+end
+
+-- A pin on the map you're actually on: a zone can have several versions
+-- (Eversong Woods 2395 / 2567) and a pin on the one you're not shown
+-- doesn't appear. The spot is moved to your map (through world
+-- coordinates) when it's on it; else its own map. Returns map, x, y.
+local function PlacePin(p)
+  if not (C_Map.SetUserWaypoint and UiMapPoint) then return end
+  local maps = {}
+  if C_Map.GetBestMapForUnit then maps[#maps + 1] = C_Map.GetBestMapForUnit("player") end
+  if WorldMapFrame and WorldMapFrame:IsShown() then maps[#maps + 1] = WorldMapFrame:GetMapID() end
+  maps[#maps + 1] = p.map
+  local w = Point(p.map, p.mx, p.my)
+  for _, m in ipairs(maps) do
+    local x, y
+    if m == p.map then
+      x, y = p.mx, p.my
+    elseif w and w.cont and C_Map.GetMapPosFromWorldPos and CreateVector2D then
+      local _, pos = C_Map.GetMapPosFromWorldPos(w.cont, CreateVector2D(w.x, w.y), m)
+      if pos then x, y = pos.x, pos.y end
+    end
+    if x and x > 0 and x < 1 and y > 0 and y < 1
+      and (not C_Map.CanSetUserWaypointOnMap or C_Map.CanSetUserWaypointOnMap(m)) then
+      C_Map.SetUserWaypoint(UiMapPoint.CreateFromCoordinates(m, x, y))
+      local got = C_Map.GetUserWaypoint and C_Map.GetUserWaypoint()
+      if got and got.uiMapID == m then
+        if C_SuperTrack and C_SuperTrack.SetSuperTrackedUserWaypoint then C_SuperTrack.SetSuperTrackedUserWaypoint(true) end
+        return m, x, y
+      end
+    end
   end
-  if ns.Travel then ns.Travel.SetGoalLabel(label, p) end
+end
+
+local function Pin(p, label, key)
+  local map, mx, my = p.map, p.mx, p.my
+  local T = Enum and Enum.SuperTrackingMapPinType or {}
+  local pinID
+  if p.poiID and TrackMapPin(ns.WQ.PIN_AREAPOI, p.poiID) then
+    pinID = p.poiID
+    print("  |cff888888tracking the map marker|r")
+  else
+    local qid = not p.poiID and T.QuestOffer and OfferQuest(p)
+    if qid and TrackMapPin(T.QuestOffer, qid) then
+      pinID = qid
+      print(string.format("  |cff888888tracking the quest offer (quest %d)|r", qid))
+    end
+  end
+  if not pinID then
+    map, mx, my = PlacePin(p)
+    if not map then
+      ns.Warn(string.format("Couldn't put a map pin on %s (%.1f, %.1f).", p.zone or "?", (p.mx or 0) * 100, (p.my or 0) * 100))
+      map, mx, my = p.map, p.mx, p.my
+    else
+      local mi = C_Map.GetMapInfo(map)
+      print(string.format("  |cff888888map pin on %s (map %d) %.1f, %.1f|r", mi and mi.name or "?", map, mx * 100, my * 100))
+    end
+  end
+  if arrivalTicker then arrivalTicker:Cancel() end
+  placed = { map = map, mx = mx, my = my, key = key, pinID = pinID, point = Point(map, mx, my) }
+  arrivalTicker = C_Timer.NewTicker(1, CheckArrival)
+  if ns.Travel then ns.Travel.SetGoalLabel(label, { map = map, mx = mx, my = my, pinID = pinID }) end
   if ns.WQWindow then ns.WQWindow:Toggle(true) end
 end
 
@@ -238,7 +332,8 @@ function P.Navigate(a)
     return
   end
   if a.schedule or a.mapEvent then
-    -- running: go to the invasion; otherwise to the NPCs (Aqir Researchers)
+    -- the event's marker on the map ("Aqir Invasion of Zul'Aman"), even
+    -- between runs; only without one, the NPCs (Aqir Researchers)
     if ns.WQ.ScanEventPOIs then pcall(ns.WQ.ScanEventPOIs, true) end
     local live = ns.WQ.EventLive(a, true)
     if live == "scenario" or live == "objective" then
@@ -247,7 +342,7 @@ function P.Navigate(a)
     end
     local ev = ns.DB.eventPOIs and ns.DB.eventPOIs[a.key]
     local hub = P.For(a) or (ns.DB.eventHubs and ns.DB.eventHubs[a.key])
-    local target = (live and ev and ev.mx and ev) or (hub and hub.mx and hub) or (ev and ev.mx and ev)
+    local target = (ev and ev.mx and ev) or (hub and hub.mx and hub)
     if not target then
       ns.Warn(a.name .. ": no marker for it on the map right now.")
       return
@@ -258,12 +353,22 @@ function P.Navigate(a)
     return
   end
   local p = P.For(a)
-  -- this week's spot from the map's Events tab (Abundance moves zone):
-  -- go there, unless the quest giver you talked to is in that same zone
+  -- this week's spot from the map's Events tab (Abundance moves zone): go
+  -- there, unless this week's quest giver is known: then its quest offer
+  -- is tracked (only quests get the game's arrow from another zone)
   local spot = a.eventMarker and ns.WQ.EventSpot(a)
-  if spot and not (p and p.source == "npc" and ns.WQ.SameZone(p.zone, spot.zone)) then
+  local offerKnown = a.pickupMoves and p and p.qid and true or false
+  if spot and not spot.mx and not offerKnown then
+    ns.Warn(string.format("%s is in %s this week; its spot isn't on the map yet.", a.name, spot.zone or "?"))
+    return
+  end
+  if spot and not offerKnown then
     Pin(spot, spot.name or a.name, a.key)
     ns.Print(string.format("Directions to %s in %s.", spot.name or a.name, spot.zone or "?"))
+    return
+  end
+  if not p and a.pickupMoves then
+    ns.Warn(a.name .. ": this week's spot isn't known yet. Open the map's Events tab while on the Midnight continent (/gc aqir shows what it lists).")
     return
   end
   if not p then

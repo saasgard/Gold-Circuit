@@ -58,6 +58,7 @@ The more you play, the better it gets: quest IDs, quest givers, reward averages 
 | `/gc done <activity>` · `undo <activity>` | Mark done / not done (or right-click it) |
 | `/gc unskip` | Bring back skipped world quests |
 | `/gc travel` | List learned hearthstone, teleports and portals (`del <n>`, `forget`) |
+| `/gc pin [activity]` | Show the map marker or pin you clicked; with an activity, save it as its spot (`/gc pin abundance`: this week's grotto, `/gc pin runestones`: where it's picked up) |
 | `/gc aqir` · `/gc sa` | Aqir / Special Assignment diagnostics |
 | `/gc help` | All commands |
 

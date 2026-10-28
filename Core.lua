@@ -588,7 +588,7 @@ local function Apply(c, e, sign)
     w.gold = w.gold + amt
     local L = DB.learned[e.k] or { cS = 0, cN = 0, qS = 0, qN = 0 }
     DB.learned[e.k] = L
-    if e.s == "Weekly Cache" then
+    if e.s == "Weekly Cache" or e.s == "Special Assignment" then
       L.cS = L.cS + amt; L.cN = L.cN + sign
     elseif e.s == "Quest" or e.s == "World Quest" then
       L.qS = L.qS + amt; L.qN = L.qN + sign
@@ -651,7 +651,7 @@ local function OnUseContainerItem(bag, slot)
   if not name then return end
   local a = ns.ActivityForCacheID(info.itemID) or ns.ActivityForCache(name)
   if a then
-    ns.PushContext("Weekly Cache", name, a.key, 10, true)
+    ns.PushContext(a.cacheSource or "Weekly Cache", name, a.key, 10, true)
   elseif IsGenericContainer(name) then
     ns.PushContext("Container", name, nil, 10, true)
   end
@@ -764,6 +764,20 @@ function handlers.ADDON_LOADED(name)
     end
   end
   for qid in pairs(ns.NOT_WEEKLY) do DB.blocked[qid] = true end
+  -- drop them if already learned; their completed flag made this week's
+  -- snapshot count the activity as done (a real turn-in sets w.at)
+  for key, ids in pairs(DB.questIDs) do
+    local hit = false
+    for qid in pairs(ns.NOT_WEEKLY) do
+      if ids[qid] then ids[qid] = nil; hit = true end
+    end
+    if hit then
+      for _, c in pairs(DB.chars or {}) do
+        local w = c.weekly and c.weekly[key]
+        if w and not w.manual and not w.at then w.done = 0 end
+      end
+    end
+  end
   -- built-in hidden weekly flags (unless one turned out not to be weekly)
   DB.eventFlags = DB.eventFlags or {}
   DB.eventFlagsDropped = DB.eventFlagsDropped or {}
@@ -868,6 +882,48 @@ function handlers.ADDON_LOADED(name)
     local s = DB.settings.act.aqir
     if s and s.remind == 5 then s.remind = 0 end
     DB.migrated.remindOff = true
+  end
+  -- event spots were taken from whichever map showed the marker first,
+  -- often a neighbouring zone's edge (Skinning Den in Zul'Aman, not Harandar)
+  if not DB.migrated.eventSpotMaps then
+    DB.eventPOIPos = nil
+    if DB.eventSpots then DB.eventSpots.abundance = nil end
+    DB.zones.abundance = nil
+    DB.migrated.eventSpotMaps = true
+  end
+  -- Saltheril's Soiree in the Events tab isn't the Apex Cache's (its
+  -- reward is the Runestones one): forget it was matched to Apex
+  if not DB.migrated.soireeRunestones then
+    for poiID, key in pairs(DB.eventPOIIDs or {}) do
+      if key == "apex" then DB.eventPOIIDs[poiID] = nil end
+    end
+    if DB.eventSpots then DB.eventSpots.apex = nil end
+    DB.zones.apex = nil
+    DB.migrated.soireeRunestones = true
+  end
+  -- the Soiree's "reward claimed" marked Runestones done on picking up the
+  -- quest: clear it (a real completion comes back from the quest flags)
+  if not DB.migrated.soireeNotDone then
+    for _, c in pairs(DB.chars) do
+      local w = c.weekly and c.weekly.runestones
+      if w and not w.manual then w.done, w.at = 0, nil end
+    end
+    DB.migrated.soireeNotDone = true
+  end
+  -- Special Assignment caches have their own cashflow line now: move
+  -- them out of "Weekly Cache" (this week's totals too)
+  if not DB.migrated.saCacheSource then
+    for _, e in ipairs(DB.ledger) do
+      if e.k == "special" and e.s == "Weekly Cache" then
+        e.s = "Special Assignment"
+        local c = DB.chars[e.c]
+        if c and c.wIn and c.weekReset and e.t >= c.weekReset - WEEK and e.a > 0 then
+          c.wIn["Weekly Cache"] = math.max(0, (c.wIn["Weekly Cache"] or 0) - e.a)
+          c.wIn["Special Assignment"] = (c.wIn["Special Assignment"] or 0) + e.a
+        end
+      end
+    end
+    DB.migrated.saCacheSource = true
   end
   -- most weeklies can be done from 80 now (only some need 90)
   if not DB.migrated.minLevel80 then
@@ -1138,7 +1194,7 @@ function ns.FixSACount(c, key)
     end
   end
   for _, e in ipairs(DB.ledger or {}) do
-    if e.c == key and e.t >= weekStart and e.k == "special" and e.s == "Weekly Cache" then caches = caches + 1 end
+    if e.c == key and e.t >= weekStart and e.k == "special" and (e.s == "Special Assignment" or e.s == "Weekly Cache") then caches = caches + 1 end
   end
   w.done = math.min(ns.ActCap(a), math.max(quests, caches))
 end
@@ -1527,6 +1583,7 @@ local HELP = {
   "/gc wqscan — rescan zones for world quests",
   "/gc aqir — Aqir event diagnostics (what the game reports right now)",
   "/gc sa — Special Assignment diagnostics (rescans first)",
+  "/gc pin [activity] — show the marker/pin you clicked on the map; with an activity, save it as its spot (event spot or pickup)",
   "/gc wqhere — add the zone you're standing in to the world quest scan",
   "/gc minimap — toggle the minimap button",
   "/gc mem — memory diagnostics (what each repeating job allocates)",
@@ -1624,6 +1681,10 @@ local function Command(msg)
     ns.WQ.FindMaps(true)
     ns.WQ.Scan()
     ns.WQ.ReportSA()
+  elseif cmd == "pin" then
+    local a = a1 and a1 ~= "" and FindAct(a1)
+    if a1 and a1 ~= "" and not a then ns.Print("Unknown activity: " .. a1) return end
+    ns.WQ.PinReport(a)
   elseif cmd == "wqhere" then
     ns.WQ.AddCurrentZone()
   elseif cmd == "wqscan" then

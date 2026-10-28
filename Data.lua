@@ -20,6 +20,7 @@ local ADDON, ns = ...
   caches  = names of the reward container(s); gold looted from these is
             attributed to the activity
   cacheIDs = item IDs of those containers (more reliable than the name)
+  cacheSource = cashflow line for gold from its caches (default "Weekly Cache")
   zone    = default zone; overwritten by the zone you actually turn it in
   minLevel = character level needed to pick it up (default 80)
   backlog = how many can be up at once after skipping weeks
@@ -29,7 +30,8 @@ local ADDON, ns = ...
   eventTab = names it has in the map's Events tab: where it is (marker,
             zone), whether it's running, and reward claimed = done
             (eventDone = false: location only; eventMarker: clicking it
-            goes to the event's spot)
+            goes to the event's spot; pickupMoves: a quest giver you
+            talked to only counts the week you talked to them)
   again90 = a level-90 version is offered on reaching 90, even if the
             80-89 one was done this week
   remind  = default minutes before an event starts to remind you (0 = off)
@@ -48,9 +50,6 @@ ns.ACTIVITIES = {
     families = { xalatath = { [98172] = true } },
     patterns = { "Unity Against the Void", "Midnight:", "Saltheril" },
     caches = { "Apex Cache" }, cacheIDs = { [279527] = true },
-    -- the Soiree is in the map's Events tab: its reward claimed = this
-    -- week's Apex Cache is had
-    eventTab = { "Saltheril's Soiree" },
     ids = {
       [93912] = "Midnight: Raid", [93911] = "Midnight: Dungeons",
       [94457] = "Midnight: Battlegrounds", [93769] = "Midnight: Housing",
@@ -84,7 +83,11 @@ ns.ACTIVITIES = {
     pickup = { 2413, 0.54, 0.53 }, -- Harandar
     gold = 2000, minutes = 5, count = 1, enabled = true, again90 = true },
 
-  -- Pick one of four runestone quests each week.
+  -- Pick one of four runestone quests each week, picked up at Saltheril's
+  -- Soiree. The Soiree's Events-tab entry isn't used: its "reward claimed"
+  -- is set by just picking up the quest, and clicking Runestones tracks the
+  -- quest offer instead of its marker (only quests get the game's arrow
+  -- through portals from another zone).
   { key = "runestones", name = "Runestones", short = "Rune",
     desc = "Pick one of the four runestone weeklies",
     patterns = { "Runestone" },
@@ -98,11 +101,13 @@ ns.ACTIVITIES = {
   -- which is where the marker goes.
   { key = "abundance", name = "Abundance", short = "Abund",
     desc = "Abundant Offerings (one zone per week)",
-    patterns = { "Abundant Offerings", "Abundance", "Abundant" },
+    -- only the exact name: "Abundance: <grotto>", the intro chain etc. aren't the weekly
+    patterns = { "Abundant Offerings" },
     caches = { "Overflowing Abundant Satchel" }, cacheIDs = { [269702] = true, [279523] = true },
     eventTab = { "Abundance" },
     eventDone = false, -- a grotto's reward isn't the weekly; only its location is used
     eventMarker = true, -- clicking it goes to this week's spot
+    pickupMoves = true, -- the quest giver is in that week's zone
     ids = { [89507] = "Abundant Offerings" },
     gold = 2000, minutes = 3, count = 1, enabled = true, again90 = true },
 
@@ -113,6 +118,7 @@ ns.ACTIVITIES = {
     patterns = { "Special Assignment" },
     caches = { "Fabled Veteran's Cache", "Fabled Coiled Isle Veteran's Cache", "Fabled Adventurer's Cache" },
     cacheIDs = { [279520] = true },
+    cacheSource = "Special Assignment", -- its own cashflow line, not "Weekly Cache"
     gold = 2000, minutes = 15, count = 3, enabled = true },
 
   -- World event on the map. Its reward shows whether this week is done:
@@ -162,6 +168,17 @@ ns.REMOVED_ACTIVITIES = { soiree = "apex", prey = false, amani = false }
 -- Quests whose titles match a pattern above but are not weeklies.
 ns.NOT_WEEKLY = {
   [95245] = true, -- Midnight: World Tour (campaign, not an Apex weekly)
+  -- Abundance quests learned by the old broad "Abundance"/"Abundant" match
+  [94361] = true, -- The Abundant Life (intro chain)
+  [97625] = true, -- Glorious Abundance
+  [91457] = true, -- Abundance: Watha'nan Crypts
+  [91302] = true, -- Abundance: Abundant Grove
+}
+
+-- Events-tab markers by area POI ID, for when the game doesn't place one
+-- on the map: { mapID, x, y, name }. A spot seen in game wins.
+ns.EVENT_SPOTS = {
+  [8525] = { 2413, 0.660, 0.616, "Abundance: Skinning Den" }, -- Harandar
 }
 
 -- IDs that were wrong in earlier data (NPC IDs, not quests); removed on load.
@@ -179,7 +196,7 @@ ns.GENERIC_CONTAINER_WORDS = { "Cache", "Chest", "Satchel", "Coffer", "Pack", "B
 
 -- Cashflow source categories (display order)
 ns.SOURCES = {
-  "Quest", "World Quest", "Weekly Cache", "Container", "Loot", "Crafting Order", "Auction",
+  "Quest", "World Quest", "Weekly Cache", "Special Assignment", "Container", "Loot", "Crafting Order", "Auction",
   "Vendor", "Repair", "Mail", "Trade", "Flight", "Trainer", "Other", "Transfer",
 }
 
@@ -187,6 +204,7 @@ ns.SOURCE_COLORS = {
   ["Quest"] = { 1.00, 0.82, 0.00 },
   ["World Quest"] = { 0.95, 0.95, 0.45 },
   ["Weekly Cache"] = { 1.00, 0.55, 0.10 },
+  ["Special Assignment"] = { 1.00, 0.40, 0.25 },
   ["Container"] = { 0.90, 0.70, 0.30 },
   ["Loot"] = { 0.60, 0.80, 0.30 },
   ["Crafting Order"] = { 0.40, 0.75, 1.00 },

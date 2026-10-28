@@ -1,0 +1,4 @@
+# store text with LF so mixed CRLF/LF files compare cleanly
+* text=auto
+*.tga binary
+*.png binary
