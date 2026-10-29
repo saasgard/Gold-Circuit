@@ -69,4 +69,4 @@ Zone scanning, world quests, completion checks and navigation work in every lang
 
 ### Found a bug?
 
-Let me know on the issue tracker. If it's about Aqir or Special Assignments, include the output of **/gc aqir** or **/gc sa**, because that shows exactly what the game is reporting.
+Let me know on the issue tracker. If it's about an event (Aqir, Abundance) or Special Assignments, include the output of **/gc events** followed by the activity (e.g. **/gc events abundance**) or **/gc sa**, because that shows exactly what the game is reporting.

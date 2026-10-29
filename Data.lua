@@ -48,7 +48,9 @@ ns.ACTIVITIES = {
     desc = "A 'Midnight:' weekly (Unity Against the Void) and Trailing Xal'atath each give an Apex Cache. Each resets every second week, a week apart, so one or both can be up.",
     -- the second kind of quest; every other Apex quest is the "Midnight:" kind
     families = { xalatath = { [98172] = true } },
-    patterns = { "Unity Against the Void", "Midnight:", "Saltheril" },
+    -- not "Saltheril": the "Saltheril's Soiree" world quest has nothing to
+    -- do with it ("Midnight: Saltheril's Soiree" is matched by "Midnight:")
+    patterns = { "Unity Against the Void", "Midnight:" },
     caches = { "Apex Cache" }, cacheIDs = { [279527] = true },
     ids = {
       [93912] = "Midnight: Raid", [93911] = "Midnight: Dungeons",
@@ -168,6 +170,7 @@ ns.REMOVED_ACTIVITIES = { soiree = "apex", prey = false, amani = false }
 -- Quests whose titles match a pattern above but are not weeklies.
 ns.NOT_WEEKLY = {
   [95245] = true, -- Midnight: World Tour (campaign, not an Apex weekly)
+  [91966] = true, -- Saltheril's Soiree (world quest, not the Apex weekly)
   -- Abundance quests learned by the old broad "Abundance"/"Abundant" match
   [94361] = true, -- The Abundant Life (intro chain)
   [97625] = true, -- Glorious Abundance

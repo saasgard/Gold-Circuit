@@ -1340,11 +1340,14 @@ function UI:UpdateMini()
   Begin(p)
   local r = ns.BuildRoute(ns.charKey)
   local total = #r.steps + #r.done
-  -- Special Assignments get their own section at the bottom
-  local saStep
+  -- Special Assignments get their own section at the bottom, world quests
+  -- under it (out of the weekly list)
+  local saStep, wqStep
   local steps = {}
   for _, st in ipairs(r.steps) do
-    if st.a and st.a.key == "special" then saStep = st else steps[#steps + 1] = st end
+    if st.a and st.a.key == "special" then saStep = st
+    elseif st.isWQGroup then wqStep = st
+    else steps[#steps + 1] = st end
   end
   m.sub:SetText(GREY .. #r.done .. "/" .. total .. " done  ·  reset " .. ResetIn(r.char) .. "|r")
   local y = St.TITLE_H + 6
@@ -1373,16 +1376,15 @@ function UI:UpdateMini()
       end
     end
   else
+    if #steps == 0 then
+      T(p, IN + 2, y + 3, GREEN .. "Weeklies done|r", RW - 4)
+      y = y + ROW
+    end
     for i, st in ipairs(steps) do
       if i > 10 then T(p, IN + 2, y + 3, GREY .. "+" .. (#steps - 10) .. " more (dashboard)|r"); y = y + ROW; break end
-      local icon, name
-      if st.isWQGroup then
-        icon, name = YELLOW .. "»|r", "World Quests"
-      else
-        icon = st.inLog and ICON_LOG or ICON_TODO
-        name = st.a and st.a.kind == "crafting" and "Crafting Orders" or st.name
-        if st.count > 1 then name = name .. string.format(" %d/%d", st.done, st.count) end
-      end
+      local icon = st.inLog and ICON_LOG or ICON_TODO
+      local name = st.a and st.a.kind == "crafting" and "Crafting Orders" or st.name
+      if st.count > 1 then name = name .. string.format(" %d/%d", st.done, st.count) end
       Row(i, icon, name, UI.StepStatus(st), ns.Money(st.gold), st)
     end
     if saStep then
@@ -1396,6 +1398,10 @@ function UI:UpdateMini()
       local step = saStep
       Hot(p, IN, y, RW, ROW, function(tt) UI.StepTooltip(tt, step) end, function(btn, owner) UI.ClickStep(step, btn, owner) end)
       y = y + ROW
+    end
+    if wqStep then
+      y = y + (saStep and 2 or 4)
+      Row(1, YELLOW .. "»|r", "World Quests", UI.StepStatus(wqStep), ns.Money(wqStep.gold), wqStep)
     end
     -- footer: what's left
     y = y + 4

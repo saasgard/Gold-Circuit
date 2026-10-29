@@ -59,7 +59,7 @@ The more you play, the better it gets: quest IDs, quest givers, reward averages 
 | `/gc unskip` | Bring back skipped world quests |
 | `/gc travel` | List learned hearthstone, teleports and portals (`del <n>`, `forget`) |
 | `/gc pin [activity]` | Show the map marker or pin you clicked; with an activity, save it as its spot (`/gc pin abundance`: this week's grotto, `/gc pin runestones`: where it's picked up) |
-| `/gc aqir` · `/gc sa` | Aqir / Special Assignment diagnostics |
+| `/gc events [activity]` · `/gc sa` | Event (Aqir, Abundance…) / Special Assignment diagnostics |
 | `/gc help` | All commands |
 
 Activity names: `apex venom harandar runestones abundance special aqir crafting stormarion`
@@ -75,8 +75,8 @@ That alt hasn't been logged in since its world quests / Special Assignments were
 **A weekly was matched to the wrong quest.**
 `/gc forget <activity>` clears it, `/gc learn <activity> <questID>` sets it, `/gc ids` lists what's learned.
 
-**Something's wrong with Aqir or Special Assignments.**
-`/gc aqir` and `/gc sa` print exactly what the game reports — paste the output in a bug report.
+**Something's wrong with an event (Aqir, Abundance) or Special Assignments.**
+`/gc events <activity>` and `/gc sa` print exactly what the game reports — paste the output in a bug report.
 
 ## How it works (details)
 

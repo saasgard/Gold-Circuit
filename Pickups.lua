@@ -229,10 +229,35 @@ function P.ClearPin(why)
   placed = nil
 end
 
+local Pin
+
 local function CheckArrival()
   if not OurPinUp() then P.ClearPin() return end
-  local d = ns.Travel and ns.Travel.Dist(ns.Travel.Sample(), placed.point)
+  local here = ns.Travel and ns.Travel.Sample()
+  if placed.via then
+    -- through the portal: on to the real destination
+    local d = ns.Travel.Dist(here, placed.via.to)
+    if d and d <= 300 then
+      local f = placed.final
+      placed = nil
+      Pin(f.p, f.label, f.key)
+    end
+    return
+  end
+  local d = ns.Travel and ns.Travel.Dist(here, placed.point)
   if d and d <= ARRIVED then P.ClearPin("you're there") end
+end
+
+-- The portal the addon's route starts with (fly to it, then take it), if
+-- any (see ViaPortal).
+local function FirstPortal(p)
+  if not (ns.Travel and ns.Travel.Plan) then return end
+  local plan = ns.Travel.Plan(Point(p.map, p.mx, p.my, p.zone))
+  if not (plan and plan.reachable) then return end
+  for _, st in ipairs(plan.steps) do
+    if st.kind == "portal" then return st.portal end
+    if not (st.kind == "fly" and st.to and st.to.kind == "portalIn") then return end
+  end
 end
 
 -- Tracks something on the map itself, like clicking it there: an event
@@ -284,7 +309,59 @@ local function PlacePin(p)
   end
 end
 
-local function Pin(p, label, key)
+-- The game's own marker for a portal ("Portal to Harandar") on the map
+-- you're on, at most 60 yards from where it's known to be: tracking it
+-- puts the marker on the portal, not floating above the spot.
+local function PortalPOI(from)
+  if not (C_AreaPoiInfo and C_AreaPoiInfo.GetAreaPOIForMap and C_Map.GetBestMapForUnit) then return end
+  local map = C_Map.GetBestMapForUnit("player")
+  local ok, pois = pcall(C_AreaPoiInfo.GetAreaPOIForMap, map or 0)
+  for _, id in ipairs(ok and type(pois) == "table" and pois or {}) do
+    local okI, info = pcall(C_AreaPoiInfo.GetAreaPOIInfo, map, id)
+    if okI and info and info.position then
+      -- atlas names aren't translated, the names are
+      local name = (info.atlasName or "") .. " " .. (info.name or "")
+      if name:lower():find("portal", 1, true) then
+        local d = ns.Travel.Dist(Point(map, info.position.x, info.position.y), from)
+        if d and d <= 60 then return id end
+      end
+    end
+  end
+end
+
+-- In the zone of p (any version of its map).
+local function InZone(p)
+  local s = ns.Travel and ns.Travel.Sample()
+  return s and (s.map == p.map or (s.zone and s.zone == p.zone)) or false
+end
+
+-- Only when the spot itself can't be tracked (a plain map pin gets no
+-- arrow from another zone): mark the first portal of the addon's route,
+-- then the spot once you're through. Returns true if it did.
+local function ViaPortal(p, label, key)
+  local pt = FirstPortal(p)
+  if not pt then return false end
+  local poi = PortalPOI(pt.from)
+  local map, mx, my
+  if poi and TrackMapPin(ns.WQ.PIN_AREAPOI, poi) then
+    map, mx, my = pt.from.map, pt.from.mx, pt.from.my
+  else
+    poi = nil
+    map, mx, my = PlacePin({ map = pt.from.map, mx = pt.from.mx, my = pt.from.my })
+  end
+  if not map then return false end
+  print(string.format("  |cff888888%s on the portal in %s » %s first|r", poi and "tracking the marker" or "map pin",
+    pt.from.zone or "?", pt.to.zone or "?"))
+  if arrivalTicker then arrivalTicker:Cancel() end
+  placed = { map = map, mx = mx, my = my, key = key, pinID = poi, via = pt, final = { p = p, label = label, key = key } }
+  arrivalTicker = C_Timer.NewTicker(1, CheckArrival)
+  if ns.Travel then
+    ns.Travel.SetGoalLabel(label, { map = p.map, mx = p.mx, my = p.my, pinID = poi, via = { map = map, mx = mx, my = my } })
+  end
+  return true
+end
+
+function Pin(p, label, key)
   local map, mx, my = p.map, p.mx, p.my
   local T = Enum and Enum.SuperTrackingMapPinType or {}
   local pinID
@@ -292,13 +369,17 @@ local function Pin(p, label, key)
     pinID = p.poiID
     print("  |cff888888tracking the map marker|r")
   else
-    local qid = not p.poiID and T.QuestOffer and OfferQuest(p)
+    -- when the giver moves (Abundance) only in its zone: every zone's giver
+    -- offers the same quest and the game's arrow goes to the nearest one
+    local a = ns.ACT_BY_KEY[key or ""]
+    local qid = not p.poiID and not (a and a.pickupMoves and not InZone(p)) and T.QuestOffer and OfferQuest(p)
     if qid and TrackMapPin(T.QuestOffer, qid) then
       pinID = qid
       print(string.format("  |cff888888tracking the quest offer (quest %d)|r", qid))
     end
   end
   if not pinID then
+    if not InZone(p) and ViaPortal(p, label, key) then return end
     map, mx, my = PlacePin(p)
     if not map then
       ns.Warn(string.format("Couldn't put a map pin on %s (%.1f, %.1f).", p.zone or "?", (p.mx or 0) * 100, (p.my or 0) * 100))
@@ -312,7 +393,6 @@ local function Pin(p, label, key)
   placed = { map = map, mx = mx, my = my, key = key, pinID = pinID, point = Point(map, mx, my) }
   arrivalTicker = C_Timer.NewTicker(1, CheckArrival)
   if ns.Travel then ns.Travel.SetGoalLabel(label, { map = map, mx = mx, my = my, pinID = pinID }) end
-  if ns.WQWindow then ns.WQWindow:Toggle(true) end
 end
 
 -- Accepting the weekly the pin was for.
@@ -328,7 +408,6 @@ function P.Navigate(a)
     if C_QuestLog.AddQuestWatch then pcall(C_QuestLog.AddQuestWatch, qid) end
     C_SuperTrack.SetSuperTrackedQuestID(qid)
     ns.Print("Tracking " .. a.name .. " (it's in your quest log).")
-    if ns.WQWindow then ns.WQWindow:Toggle(true) end
     return
   end
   if a.schedule or a.mapEvent then
@@ -353,22 +432,21 @@ function P.Navigate(a)
     return
   end
   local p = P.For(a)
-  -- this week's spot from the map's Events tab (Abundance moves zone): go
-  -- there, unless this week's quest giver is known: then its quest offer
-  -- is tracked (only quests get the game's arrow from another zone)
+  -- this week's spot from the map's Events tab (Abundance moves zone): its
+  -- marker is tracked, like clicking it on the map. Not the quest giver you
+  -- talked to: every zone's giver offers the same quest.
   local spot = a.eventMarker and ns.WQ.EventSpot(a)
-  local offerKnown = a.pickupMoves and p and p.qid and true or false
-  if spot and not spot.mx and not offerKnown then
+  if spot and not spot.mx then
     ns.Warn(string.format("%s is in %s this week; its spot isn't on the map yet.", a.name, spot.zone or "?"))
     return
   end
-  if spot and not offerKnown then
+  if spot then
     Pin(spot, spot.name or a.name, a.key)
     ns.Print(string.format("Directions to %s in %s.", spot.name or a.name, spot.zone or "?"))
     return
   end
   if not p and a.pickupMoves then
-    ns.Warn(a.name .. ": this week's spot isn't known yet. Open the map's Events tab while on the Midnight continent (/gc aqir shows what it lists).")
+    ns.Warn(a.name .. ": this week's spot isn't known yet. Open the map's Events tab while on the Midnight continent (/gc events abundance shows what it lists).")
     return
   end
   if not p then

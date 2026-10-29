@@ -1097,6 +1097,32 @@ local function EventSpotFor(poiID, name)
     label = label, zone = zone or (mi and mi.name) or "?", t = time() }
 end
 
+-- An Events-tab activity's marker that's actually on a map (Abundance:
+-- Herbalism Grotto). The Events tab can list another one with no marker
+-- anywhere ("Abundance: Skinning Den", map nil); the map is where it is.
+local function MapMarkerFor(a)
+  local best, bestID
+  for mapID in pairs(WQ.FindMaps()) do
+    local mi = C_Map.GetMapInfo(mapID)
+    for _, fn in ipairs({ C_AreaPoiInfo.GetAreaPOIForMap, C_AreaPoiInfo.GetEventsForMap }) do
+      local ok, list = false, nil
+      if fn then ok, list = pcall(fn, mapID) end
+      for _, id in ipairs(ok and type(list) == "table" and list or {}) do
+        local okI, info = pcall(C_AreaPoiInfo.GetAreaPOIInfo, mapID, id)
+        if okI and info and info.name and info.position then
+          for _, n in ipairs(a.eventTab) do
+            if info.name:lower():find(n:lower(), 1, true) then
+              local score = WQ.POIScore(info, mi, info.position.x, info.position.y)
+              if not best or score > best then best, bestID = score, id end
+            end
+          end
+        end
+      end
+    end
+  end
+  return bestID
+end
+
 -- Is the event's marker on its map right now? nil = can't tell.
 local function MarkerUp(poiID)
   local _, map = EventPOIInfo(poiID)
@@ -1124,15 +1150,25 @@ function WQ.ScanScheduler()
     return
   end
   local now = time() -- the Events tab compares start/end times with time()
+  -- the Events tab only shows an event the game has a marker for
+  -- (GetAreaPOIInfo without a map, Blizzard's EventScheduler.lua); the lists
+  -- can still hold others, e.g. last week's Abundance grotto
+  local function Listed(e)
+    local ok, info = pcall(C_AreaPoiInfo.GetAreaPOIInfo, nil, e.areaPoiID)
+    return ok and info ~= nil
+  end
   local out = {}
   for _, a in ipairs(ns.ACTIVITIES) do
     if a.schedule or a.eventTab then out[a.key] = { ongoing = false, t = now } end
   end
   for _, e in ipairs(ongoing or {}) do
-    local a = EventActivity(e.areaPoiID)
+    local a = Listed(e) and EventActivity(e.areaPoiID)
     local s = a and out[a.key]
     if s then
-      s.matched, s.ongoing, s.poiID = true, true, e.areaPoiID
+      -- several can be listed (last week's grotto too): the one whose
+      -- marker is on the map wins
+      if not s.poiID or (MarkerUp(e.areaPoiID) and not MarkerUp(s.poiID)) then s.poiID = e.areaPoiID end
+      s.matched, s.ongoing = true, true
       if e.rewardsClaimed then s.claimed = true end
     end
   end
@@ -1140,7 +1176,7 @@ function WQ.ScanScheduler()
   -- startTime <= now < endTime) and the next start. Reward claimed on any
   -- of them means you've had this week's reward.
   for _, e in ipairs(scheduled or {}) do
-    local a = EventActivity(e.areaPoiID)
+    local a = Listed(e) and EventActivity(e.areaPoiID)
     local s = a and out[a.key]
     if s and e.startTime and e.endTime then
       s.matched = true
@@ -1148,7 +1184,10 @@ function WQ.ScanScheduler()
       if e.rewardsClaimed then s.claimed = true end
       if e.endTime <= now and (not s.lastEnd or e.endTime > s.lastEnd) then s.lastEnd = e.endTime end
       if e.startTime <= now and e.endTime > now then
-        s.window, s.ends, s.poiID = true, e.endTime, s.poiID or e.areaPoiID
+        local cur = s.poiID
+        if not cur or (MarkerUp(e.areaPoiID) and not MarkerUp(cur)) then s.poiID = e.areaPoiID end
+        s.window = true
+        if s.poiID == e.areaPoiID then s.ends = e.endTime end
       elseif e.startTime > now and (not s.nextStart or e.startTime < s.nextStart) then
         s.nextStart, s.nextEnd, s.nextPoi = e.startTime, e.endTime, e.areaPoiID
         s.hasReminder = e.hasReminder and true or false
@@ -1173,10 +1212,15 @@ function WQ.ScanScheduler()
     -- the running one, else the next to start (the list can still hold
     -- ended ones, e.g. last week's zone)
     local poi = s.poiID or s.nextPoi or s.anyPoi
+    -- its marker on the map beats the Events tab's entry
+    if a.eventTab and a.eventMarker then poi = MapMarkerFor(a) or poi end
+    -- a marker you clicked on the map this week wins (WQ.OnSuperTrack)
+    local cur = ns.DB.eventSpots[key]
+    if cur and cur.picked and (cur.t or 0) >= ns.NextReset() - 604800 then poi = nil end
     if a.eventTab and poi then
       local spot = EventSpotFor(poi, a.name)
       if spot then
-        spot.ends = s.poiID and s.ends or nil -- the running one: valid until it ends
+        spot.ends = poi == s.poiID and s.ends or nil -- the running one: valid until it ends
         ns.DB.eventSpots[key] = spot
         ns.DB.zones[key] = spot.zone
       end
@@ -1188,12 +1232,32 @@ function WQ.ScanScheduler()
   end
 end
 
+-- Clicking an event's marker on the map (Abundance: Herbalism Grotto): that's
+-- where it is this week, whatever the Events tab list says.
+function WQ.OnSuperTrack()
+  if not (C_SuperTrack and C_SuperTrack.GetSuperTrackedMapPin and C_EventScheduler) then return end
+  local ok, pinType, poiID = pcall(C_SuperTrack.GetSuperTrackedMapPin)
+  if not (ok and pinType == PIN_AREAPOI and poiID) then return end
+  local a = EventActivity(poiID)
+  if not (a and a.eventTab and a.eventMarker) then return end
+  ns.DB.eventSpots = ns.DB.eventSpots or {}
+  local cur = ns.DB.eventSpots[a.key]
+  if cur and cur.poiID == poiID then return end
+  local spot = EventSpotFor(poiID, a.name)
+  if not spot then return end
+  spot.picked = true
+  ns.DB.eventSpots[a.key] = spot
+  ns.DB.zones[a.key] = spot.zone
+  ns.Print(string.format("%s this week: %s in %s (the marker you clicked).", a.name, spot.name or "?", spot.zone or "?"))
+end
+
 -- Where an Events-tab activity is now (Abundance's grotto, Stormarion
--- Assault...), or nil: the running one until it ends, otherwise a spot
--- seen in the last day.
+-- Assault...), or nil: the running one until it ends, a marker you
+-- clicked this week, otherwise a spot seen in the last day.
 function WQ.EventSpot(a)
   local spot = ns.DB.eventSpots and ns.DB.eventSpots[a.key]
   if not spot then return end
+  if spot.picked then return (spot.t or 0) >= ns.NextReset() - 604800 and spot or nil end
   if spot.ends then return spot.ends > time() and spot or nil end
   if time() - (spot.t or 0) < 86400 then return spot end
 end
@@ -1344,7 +1408,7 @@ local function WidgetTexts(setID)
 end
 WQ.WidgetTexts = WidgetTexts
 
--- /gc aqir: everything the Events tab lists, to see what Aqir is called.
+-- /gc events: everything the Events tab lists.
 local function ReportScheduler()
   local ES = C_EventScheduler
   if not ES then print("  Events tab: not available on this client") return end
@@ -1359,8 +1423,10 @@ local function ReportScheduler()
       when = e.startTime > now and (" starts in " .. ns.Duration(e.startTime - now))
         or (e.endTime and e.endTime > now and (" running, ends in " .. ns.Duration(e.endTime - now)) or " ended")
     end
-    print(string.format("    %s %d \"%s\" map %s%s%s%s", kind, e.areaPoiID or 0, info and info.name or "?", tostring(map),
-      when, e.rewardsClaimed and " |cff33ff66reward claimed|r" or "", a and (" |cffffd100= " .. a.name .. "|r") or ""))
+    local okL, listed = pcall(C_AreaPoiInfo.GetAreaPOIInfo, nil, e.areaPoiID)
+    print(string.format("    %s %d \"%s\" map %s%s%s%s%s", kind, e.areaPoiID or 0, info and info.name or "?", tostring(map),
+      when, e.rewardsClaimed and " |cff33ff66reward claimed|r" or "", a and (" |cffffd100= " .. a.name .. "|r") or "",
+      (okL and listed) and "" or " |cff888888(not shown in the tab)|r"))
   end
   local any = false
   print("  Events tab lists:")
@@ -1373,10 +1439,13 @@ local function ReportScheduler()
   if not any then print("    nothing (open the map's Events tab once, then try again)") end
 end
 
--- /gc aqir: what each source sees right now.
+-- /gc events [activity]: what each source sees right now.
 function WQ.ReportEvent(a)
   WQ.ScanEventPOIs(true)
   ns.CheckEventTurnins()
+  -- the word its quests and markers are found by ("Aqir", "Abundance")
+  local word = (a.eventNames and a.eventNames[1]) or (a.eventTab and a.eventTab[1]) or a.name
+  local lword = word:lower()
   ns.Print(a.name .. " event diagnostics:")
   print("  Scenario: " .. tostring(ScenarioName() or "none"))
   local tasks = TasksHere()
@@ -1386,14 +1455,14 @@ function WQ.ReportEvent(a)
   if C_QuestLog.GetNumQuestLogEntries then
     for i = 1, C_QuestLog.GetNumQuestLogEntries() do
       local info = C_QuestLog.GetInfo(i)
-      if info and info.title and info.title:lower():find("aqir", 1, true) then
+      if info and info.title and info.title:lower():find(lword, 1, true) then
         n = n + 1
         print(string.format("  Quest log: %d \"%s\"%s%s%s", info.questID or 0, info.title, info.isTask and " (task)" or "",
           info.isHidden and " (hidden)" or "", (info.campaignID and info.campaignID > 0) and " (campaign - ignored)" or ""))
       end
     end
   end
-  if n == 0 then print("  Quest log: nothing with Aqir") end
+  if n == 0 then print("  Quest log: nothing with " .. word) end
   local listed = 0
   if C_AreaPoiInfo and C_AreaPoiInfo.GetAreaPOIForMap then
     for mapID, mapName in pairs(WQ.FindMaps()) do
@@ -1401,7 +1470,7 @@ function WQ.ReportEvent(a)
       for _, poiID in ipairs(ok and pois or {}) do
         local ok2, info = pcall(C_AreaPoiInfo.GetAreaPOIInfo, mapID, poiID)
         local text = ok2 and info and ((info.name or "") .. " " .. (info.description or "")) or ""
-        if text:lower():find("aqir", 1, true) then
+        if text:lower():find(lword, 1, true) then
           listed = listed + 1
           print(string.format("  Marker %d on %s (map %d): \"%s\" %s", poiID, mapName, mapID, info.name or "?", info.description or ""))
           if listed == 1 then
@@ -1411,12 +1480,14 @@ function WQ.ReportEvent(a)
       end
     end
   end
-  if listed == 0 then print("  Markers mentioning Aqir: none on the scanned maps") end
-  local ev = ns.DB.eventPOIs and ns.DB.eventPOIs[a.key]
-  print("  Event marker: " .. (ev and string.format("%s on %s (%.0f, %.0f)%s", ev.name, ev.zone, ev.mx * 100, ev.my * 100,
-    ev.ends and (", ends in " .. ns.Duration(ev.ends - time())) or "") or "none (not running)"))
-  local hub = ns.DB.eventHubs and ns.DB.eventHubs[a.key]
-  print("  NPCs: " .. (hub and string.format("%s on %s (%.0f, %.0f)", hub.name, hub.zone, hub.mx * 100, hub.my * 100) or "none found"))
+  if listed == 0 then print("  Markers mentioning " .. word .. ": none on the scanned maps") end
+  if a.schedule then
+    local ev = ns.DB.eventPOIs and ns.DB.eventPOIs[a.key]
+    print("  Event marker: " .. (ev and string.format("%s on %s (%.0f, %.0f)%s", ev.name, ev.zone, ev.mx * 100, ev.my * 100,
+      ev.ends and (", ends in " .. ns.Duration(ev.ends - time())) or "") or "none (not running)"))
+    local hub = ns.DB.eventHubs and ns.DB.eventHubs[a.key]
+    print("  NPCs: " .. (hub and string.format("%s on %s (%.0f, %.0f)", hub.name, hub.zone, hub.mx * 100, hub.my * 100) or "none found"))
+  end
   local pk = ns.Pickups and ns.Pickups.For(a)
   if pk then print(string.format("  Learned quest giver: %s on %s (%.0f, %.0f), from %s", pk.label or "?", pk.zone or "?", pk.mx * 100, pk.my * 100, ns.Pickups.SourceText(pk))) end
   pcall(WQ.ScanScheduler)
@@ -1432,6 +1503,11 @@ function WQ.ReportEvent(a)
       sc.nextStart and (", next starts in " .. ns.Duration(sc.nextStart - now) .. (sc.hasReminder and " (game reminder set)" or "")) or ""))
   end
   ReportScheduler()
+  if a.eventMarker then
+    local sp = WQ.EventSpot(a)
+    print("  Spot used: " .. (sp and string.format("%s (marker %s) on %s (%.1f, %.1f)%s", sp.name or "?", tostring(sp.poiID),
+      sp.zone or "?", (sp.mx or 0) * 100, (sp.my or 0) * 100, sp.picked and ", the marker you clicked" or "") or "none"))
+  end
   local c = ns.GetChar()
   local w = c.weekly and c.weekly[a.key]
   print("  This week on this character: " .. ((w and w.done or 0) >= 1 and "DONE" or "not done"))
@@ -1440,7 +1516,7 @@ function WQ.ReportEvent(a)
     for id in pairs(flags) do
       print(string.format("  Learned weekly flag %d: %s", id, C_QuestLog.IsQuestFlaggedCompleted(id) and "completed" or "not completed"))
     end
-  else
+  elseif a.mapEvent then
     print("  Weekly flag: not learned yet (learned the next time a character gets the weekly satchel)")
   end
   for qid in pairs(a.doneQuests or {}) do
@@ -1454,14 +1530,18 @@ function WQ.ReportEvent(a)
     for id in pairs(ns.DB.eventBags[a.key]) do print("  Reward bag item: " .. id) end
   end
   if ns.DB.recentTurnins and #ns.DB.recentTurnins > 0 then
-    print("  Your last quest turn-ins:")
+    print("  Last quest turn-ins (all characters):")
     for i, r in ipairs(ns.DB.recentTurnins) do
       if i > 10 then break end
-      print(string.format("    %s  %d  %s", date("%H:%M", r.t), r.qid, tostring(r.title or "?")))
+      local c = r.char and ns.DB.chars[r.char]
+      print(string.format("    %s  %d  %s  |cff888888%s|r", date("%H:%M", r.t), r.qid, tostring(r.title or "?"),
+        r.char and ns.ColorName(r.char, c) or "?"))
     end
   end
-  local active, nextIn = ns.ScheduleInfo(a, ns.GetChar(), true)
-  print("  Result: " .. (active and "ACTIVE (" .. tostring(WQ.EventLive(a, true) or "quest log") .. ")" or ("not active, next start in " .. ns.Duration(nextIn))))
+  if a.schedule then
+    local active, nextIn = ns.ScheduleInfo(a, ns.GetChar(), true)
+    print("  Result: " .. (active and "ACTIVE (" .. tostring(WQ.EventLive(a, true) or "quest log") .. ")" or ("not active, next start in " .. ns.Duration(nextIn))))
+  end
 end
 
 -- /gc sa: what the scan sees for Special Assignments.

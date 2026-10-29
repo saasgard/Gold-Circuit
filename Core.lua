@@ -763,6 +763,15 @@ function handlers.ADDON_LOADED(name)
       end
     end
   end
+  -- the Soiree world quest was matched to Apex by its title and its turn-in
+  -- counted as the Apex Cache: clear that (real ones come back from the
+  -- quest flags)
+  if DB.questIDs.apex and DB.questIDs.apex[91966] then
+    for _, c in pairs(DB.chars or {}) do
+      local w = c.weekly and c.weekly.apex
+      if w and not w.manual then w.done, w.at = 0, nil end
+    end
+  end
   for qid in pairs(ns.NOT_WEEKLY) do DB.blocked[qid] = true end
   -- drop them if already learned; their completed flag made this week's
   -- snapshot count the activity as done (a real turn-in sets w.at)
@@ -1200,7 +1209,7 @@ function ns.FixSACount(c, key)
 end
 
 -- Event reward quests turned in earlier this week on this character
--- (from the recent turn-ins kept for /gc aqir).
+-- (from the recent turn-ins kept for /gc events).
 function ns.CheckEventTurnins()
   local c = ns.GetChar()
   local weekStart = (c.weekReset or ns.NextReset()) - WEEK
@@ -1220,7 +1229,7 @@ ns.eventSeenAt = {}
 
 function handlers.QUEST_TURNED_IN(qid, xp, money)
   local title = TitleFor(qid) or (DB.wq[qid] and DB.wq[qid].title)
-  -- keep the last few turn-ins for /gc aqir
+  -- keep the last few turn-ins for /gc events
   DB.recentTurnins = DB.recentTurnins or {}
   local turnedInWQ = (C_QuestLog.IsWorldQuest and C_QuestLog.IsWorldQuest(qid)) and true or false
   table.insert(DB.recentTurnins, 1, { qid = qid, title = title, t = time(), char = ns.charKey, wq = turnedInWQ })
@@ -1353,7 +1362,10 @@ function handlers.EVENT_SCHEDULER_UPDATE()
     ns.Refresh()
   end)
 end
-function handlers.SUPER_TRACKING_CHANGED() ns.Refresh() end
+function handlers.SUPER_TRACKING_CHANGED()
+  if ns.WQ then pcall(ns.WQ.OnSuperTrack) end
+  ns.Refresh()
+end
 
 function handlers.ZONE_CHANGED_NEW_AREA()
   if ns.WQ then ns.WQ.QueueScan(3) end
@@ -1581,7 +1593,7 @@ local HELP = {
   "/gc travel — list learned hearthstone/teleports/portals (del <n>: remove one, forget: clear all)",
   "/gc wq — list gold world quests open on this character",
   "/gc wqscan — rescan zones for world quests",
-  "/gc aqir — Aqir event diagnostics (what the game reports right now)",
+  "/gc events [activity] — event diagnostics: the map's Events tab, markers, quests (default Aqir; e.g. /gc events abundance)",
   "/gc sa — Special Assignment diagnostics (rescans first)",
   "/gc pin [activity] — show the marker/pin you clicked on the map; with an activity, save it as its spot (event spot or pickup)",
   "/gc wqhere — add the zone you're standing in to the world quest scan",
@@ -1675,8 +1687,11 @@ local function Command(msg)
     end
   elseif cmd == "wqwin" then
     ns.WQWindow:Toggle()
-  elseif cmd == "aqir" then
-    ns.WQ.ReportEvent(ns.ACT_BY_KEY.aqir)
+  elseif cmd == "events" or cmd == "aqir" then
+    -- /gc aqir: the old name, still works
+    local a = cmd == "aqir" and ns.ACT_BY_KEY.aqir or (a1 and a1 ~= "" and FindAct(a1)) or ns.ACT_BY_KEY.aqir
+    if not a then ns.Print("Unknown activity: " .. tostring(a1)) return end
+    ns.WQ.ReportEvent(a)
   elseif cmd == "sa" then
     ns.WQ.FindMaps(true)
     ns.WQ.Scan()

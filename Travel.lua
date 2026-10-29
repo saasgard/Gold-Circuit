@@ -538,7 +538,7 @@ end
 -- Label for a map pin the addon placed (e.g. "Pick up: Harandar").
 local goalLabel
 function Travel.SetGoalLabel(label, p)
-  goalLabel = { label = label, map = p.map, mx = p.mx, my = p.my, pinID = p.pinID }
+  goalLabel = { label = label, map = p.map, mx = p.mx, my = p.my, pinID = p.pinID, via = p.via }
 end
 
 function Travel.Goal()
@@ -581,6 +581,13 @@ function Travel.Goal()
   if C_Map.HasUserWaypoint and C_Map.HasUserWaypoint() and C_Map.GetUserWaypoint then
     local p = C_Map.GetUserWaypoint()
     if p and p.uiMapID and p.position then
+      -- the pin on a portal on the way (Pickups): directions still go to
+      -- where it leads
+      local L, V = goalLabel, goalLabel and goalLabel.via
+      if V and V.map == p.uiMapID and math.abs(V.mx - p.position.x) < 0.002 and math.abs(V.my - p.position.y) < 0.002 then
+        local g = MapPointToWorld(L.map, L.mx, L.my)
+        if g then g.label = L.label; return g end
+      end
       local g = MapPointToWorld(p.uiMapID, p.position.x, p.position.y)
       if g then
         g.label = "Map pin"
