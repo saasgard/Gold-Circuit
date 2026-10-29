@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.1.0
+
+### Fixes
+- Apex Cache: the "Saltheril's Soiree" world quest no longer counts as the Apex Cache (only "Midnight: Saltheril's Soiree" does). A false completion it caused is cleared on login.
+- Abundance: directions go to this week's grotto, the one with a marker on the map, even when the map's Events tab lists another one. Every zone's quest giver offers the same quest, so the giver you talked to last is no longer used.
+
+### Changes
+- Clicking a weekly only gives directions; the World Quest Tracker no longer opens on its own (open it with its button, Shift-click on the minimap button or /gc wq).
+- Directions track the event's map marker or the quest offer, like clicking it on the map, and the game's own arrow finds the way. Only when nothing can be tracked from another zone is the portal on the route marked first (the game's portal marker when there is one), then the spot once you're through.
+- Clicking an Abundance grotto marker on the map makes it this week's spot until the reset.
+- Compact tracker: the World Quests row sits under Special Assignments, apart from the weekly list.
+- **/gc events [activity]** replaces /gc aqir (which still works): diagnostics for any event, e.g. /gc events abundance. Recent turn-ins show which character turned them in.
+
 ## 1.0.1
 
 ### Fixes
