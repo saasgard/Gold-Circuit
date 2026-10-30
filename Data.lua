@@ -181,7 +181,7 @@ ns.NOT_WEEKLY = {
 -- Events-tab markers by area POI ID, for when the game doesn't place one
 -- on the map: { mapID, x, y, name }. A spot seen in game wins.
 ns.EVENT_SPOTS = {
-  [8525] = { 2413, 0.660, 0.616, "Abundance: Skinning Den" }, -- Harandar
+  [8525] = { 2437, 0.316, 0.261, "Abundance: Skinning Den" }, -- Zul'Aman
 }
 
 -- IDs that were wrong in earlier data (NPC IDs, not quests); removed on load.

@@ -1100,7 +1100,9 @@ end
 -- An Events-tab activity's marker that's actually on a map (Abundance:
 -- Herbalism Grotto). The Events tab can list another one with no marker
 -- anywhere ("Abundance: Skinning Den", map nil); the map is where it is.
-local function MapMarkerFor(a)
+-- An older grotto's marker can still be up: the running one wins if it's on
+-- a map too.
+local function MapMarkerFor(a, running)
   local best, bestID
   for mapID in pairs(WQ.FindMaps()) do
     local mi = C_Map.GetMapInfo(mapID)
@@ -1112,6 +1114,7 @@ local function MapMarkerFor(a)
         if okI and info and info.name and info.position then
           for _, n in ipairs(a.eventTab) do
             if info.name:lower():find(n:lower(), 1, true) then
+              if id == running then return id end
               local score = WQ.POIScore(info, mi, info.position.x, info.position.y)
               if not best or score > best then best, bestID = score, id end
             end
@@ -1213,10 +1216,10 @@ function WQ.ScanScheduler()
     -- ended ones, e.g. last week's zone)
     local poi = s.poiID or s.nextPoi or s.anyPoi
     -- its marker on the map beats the Events tab's entry
-    if a.eventTab and a.eventMarker then poi = MapMarkerFor(a) or poi end
-    -- a marker you clicked on the map this week wins (WQ.OnSuperTrack)
+    if a.eventTab and a.eventMarker then poi = MapMarkerFor(a, s.poiID) or poi end
+    -- a marker you clicked on the map wins until its slot ends (WQ.OnSuperTrack)
     local cur = ns.DB.eventSpots[key]
-    if cur and cur.picked and (cur.t or 0) >= ns.NextReset() - 604800 then poi = nil end
+    if cur and cur.picked and (cur.ends or 0) > now then poi = nil end
     if a.eventTab and poi then
       local spot = EventSpotFor(poi, a.name)
       if spot then
@@ -1233,7 +1236,8 @@ function WQ.ScanScheduler()
 end
 
 -- Clicking an event's marker on the map (Abundance: Herbalism Grotto): that's
--- where it is this week, whatever the Events tab list says.
+-- where it is until the running slot ends, whatever the Events tab list says.
+-- The grotto changes within the week, so a click can't hold longer than that.
 function WQ.OnSuperTrack()
   if not (C_SuperTrack and C_SuperTrack.GetSuperTrackedMapPin and C_EventScheduler) then return end
   local ok, pinType, poiID = pcall(C_SuperTrack.GetSuperTrackedMapPin)
@@ -1245,19 +1249,20 @@ function WQ.OnSuperTrack()
   if cur and cur.poiID == poiID then return end
   local spot = EventSpotFor(poiID, a.name)
   if not spot then return end
-  spot.picked = true
+  local sc = WQ.sched and WQ.sched[a.key]
+  spot.ends = sc and sc.ends
+  spot.picked = spot.ends and true or nil
   ns.DB.eventSpots[a.key] = spot
   ns.DB.zones[a.key] = spot.zone
   ns.Print(string.format("%s this week: %s in %s (the marker you clicked).", a.name, spot.name or "?", spot.zone or "?"))
 end
 
 -- Where an Events-tab activity is now (Abundance's grotto, Stormarion
--- Assault...), or nil: the running one until it ends, a marker you
--- clicked this week, otherwise a spot seen in the last day.
+-- Assault...), or nil: the running one or a marker you clicked until it
+-- ends, otherwise a spot seen in the last day.
 function WQ.EventSpot(a)
   local spot = ns.DB.eventSpots and ns.DB.eventSpots[a.key]
   if not spot then return end
-  if spot.picked then return (spot.t or 0) >= ns.NextReset() - 604800 and spot or nil end
   if spot.ends then return spot.ends > time() and spot or nil end
   if time() - (spot.t or 0) < 86400 then return spot end
 end
