@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.1
 
 ### Fixes
 - Abundance: directions follow the grotto when it changes during the week. A grotto marker you clicked now only holds until its slot ends, not until the weekly reset, and the running grotto beats an older marker still on the map.

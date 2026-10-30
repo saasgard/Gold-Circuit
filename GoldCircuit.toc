@@ -2,7 +2,7 @@
 ## Title: Gold Circuit
 ## Notes: Weekly caches, world quests, Special Assignments, events and crafting orders tracked across your whole alt army, with route planning, navigation and a cashflow ledger.
 ## Author: Skeide
-## Version: 1.1.0
+## Version: 1.1.1
 ## Category: Economy
 ## IconTexture: Interface\AddOns\GoldCircuit\Media\icon
 ## SavedVariables: GoldCircuitDB
