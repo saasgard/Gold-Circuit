@@ -206,6 +206,8 @@ function Orders.Scan(force)
 
   local c = ns.GetChar()
   local prof = CurrentProfession()
+  -- gathering professions take no orders: opening Mining must not list it
+  if c.craftProfs and not tContains(c.craftProfs, prof) then return end
   local store = Orders.Store(c)
   local entry = store[prof] or { orders = {} }
   store[prof] = entry

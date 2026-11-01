@@ -900,6 +900,16 @@ function handlers.ADDON_LOADED(name)
     DB.zones.abundance = nil
     DB.migrated.eventSpotMaps = true
   end
+  -- opening a gathering profession's window left an empty orders entry
+  -- that counted as a crafting profession (Mining under Crafting Orders)
+  if not DB.migrated.emptyCraftOrders then
+    for _, c in pairs(DB.chars) do
+      for prof, entry in pairs(c.craftOrders or {}) do
+        if not entry.scanned and not next(entry.orders or {}) then c.craftOrders[prof] = nil end
+      end
+    end
+    DB.migrated.emptyCraftOrders = true
+  end
   -- Saltheril's Soiree in the Events tab isn't the Apex Cache's (its
   -- reward is the Runestones one): forget it was matched to Apex
   if not DB.migrated.soireeRunestones then

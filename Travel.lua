@@ -10,7 +10,9 @@ local ADDON, ns = ...
     * Teleport items you used from your bags or toy box.
     * Portals: any loading screen or instant jump that wasn't one of the
       above is stored as a one-way link from where you were to where you
-      arrived. Portal links are shared by all characters.
+      arrived. Portal links are shared by all characters, so a mage's
+      portal is never one: it's skipped, or for the mage who cast it,
+      kept as that character's teleport spell. Summons are skipped too.
 
   Planning: a shortest-time search over your position, teleport
   destinations, portal entrances/exits and the goal. Flying between any
@@ -161,6 +163,11 @@ local BUILTIN_PORTALS = {
 local BUILTIN_TOYS = {
   { itemID = 253629, name = "Personal Key to the Arcantina", to = { 2541, 0.5050, 0.8070 } },
 }
+-- Teleport toys that land at an activity's current spot, so where one went
+-- last time is never remembered.
+local EVENT_TOYS = {
+  { itemID = 266370, activity = "abundance" }, -- Dundun's Abundant Travel Method
+}
 
 local function MapPoint(map, mx, my)
   if not (C_Map.GetWorldPosFromMapPos and CreateVector2D) then return end
@@ -198,6 +205,15 @@ function Travel.BuiltinToys()
   return out
 end
 
+local function ToyOption(id, dest)
+  local cd = ItemCooldown(id)
+  local sid = C_Item and C_Item.GetItemSpell and select(2, C_Item.GetItemSpell(id))
+  local name = ItemName(id)
+  return { key = "item:" .. id, kind = "item", itemID = id, name = name, dest = dest,
+    cast = sid and SpellCast(sid, 10) or 10, cooldown = cd, ready = cd == 0,
+    note = cd > 0 and ("ready in " .. ns.Duration(cd)) or nil, label = name .. " » " .. (dest.zone or "?") }
+end
+
 -- Every teleport this character could use, available or not.
 function Travel.Teleports()
   local out = {}
@@ -233,12 +249,15 @@ function Travel.Teleports()
   for _, b in ipairs(Travel.BuiltinToys()) do
     local id = b.itemID
     if id and not D().tele["item:" .. id] and OwnsItem(id) then
-      local cd = ItemCooldown(id)
-      local sid = C_Item and C_Item.GetItemSpell and select(2, C_Item.GetItemSpell(id))
-      local name = ItemName(id)
-      out[#out + 1] = { key = "item:" .. id, kind = "item", itemID = id, name = name, dest = b.dest,
-        cast = sid and SpellCast(sid, 10) or 10, cooldown = cd, ready = cd == 0,
-        note = cd > 0 and ("ready in " .. ns.Duration(cd)) or nil, label = name .. " » " .. (b.dest.zone or "?") }
+      out[#out + 1] = ToyOption(id, b.dest)
+    end
+  end
+  -- toys that follow an activity, while its spot is known
+  for _, b in ipairs(EVENT_TOYS) do
+    if OwnsItem(b.itemID) then
+      local spot = ns.WQ.EventSpot(ns.ACT_BY_KEY[b.activity])
+      local dest = spot and spot.mx and MapPoint(spot.map, spot.mx, spot.my)
+      if dest then out[#out + 1] = ToyOption(b.itemID, dest) end
     end
   end
   return out
@@ -248,6 +267,7 @@ end
 -- Learning
 ------------------------------------------------------------------------
 local lastItem
+local summonAccepted -- GetTime() when you last accepted a summon
 local prev, preLoad, loading = nil, nil, false
 
 -- Recent spell casts by the player, newest first: { spellID, t (finished),
@@ -257,6 +277,8 @@ local prev, preLoad, loading = nil, nil, false
 -- happens when it ends.
 local casts, castStart, chanStart = {}, {}, {}
 local TELEPORT_CAST = 3.5 -- seconds; mounts (1.5s) and instant portals stay below this
+local MAGE_PORTAL_CAST = 8 -- seconds; no mage combat spell casts this long
+local MAGE_PORTAL_LIFE = 60 -- seconds a mage's portal stays open
 
 local function PushCast(sid, channel)
   local now = GetTime()
@@ -344,10 +366,13 @@ end
 -- The teleport cast that finished right before a jump, if any:
 -- { spellID, t, casted } where casted = it had a real cast/channel time
 -- (hearthstones, toys, teleport spells), unlike portals and mounts.
+-- A mage walks into their own portal a while after casting it.
 local function CastBefore(from)
   local best, bestScore
+  local mage = select(2, UnitClass("player")) == "MAGE"
   for _, cst in ipairs(casts) do
-    if cst.t >= from.t - 1.5 and cst.t <= from.t + 4 then
+    local ownPortal = mage and cst.dur >= MAGE_PORTAL_CAST and KnowsSpell(cst.spellID)
+    if cst.t >= from.t - (ownPortal and MAGE_PORTAL_LIFE or 1.5) and cst.t <= from.t + 4 then
       local casted = cst.dur >= TELEPORT_CAST or SpellCast(cst.spellID, 0) >= TELEPORT_CAST
       local score = (hearthSpells[cst.spellID] and 4) or (casted and KnowsSpell(cst.spellID) and 3)
         or (casted and 2) or 1
@@ -391,8 +416,39 @@ local function AtKnownTeleport(to)
   return false
 end
 
+-- Another mage in the group: mage portals only work for group members, and
+-- the object looks the same as a fixed portal, so any jump could be theirs.
+local function GroupMage()
+  local raid = IsInRaid and IsInRaid()
+  for i = 1, GetNumGroupMembers and GetNumGroupMembers() or 0 do
+    local unit = (raid and "raid" or "party") .. i
+    if not UnitIsUnit(unit, "player") and select(2, UnitClass(unit)) == "MAGE" then return true end
+  end
+  return false
+end
+
+-- Was this jump one of the EVENT_TOYS?
+local function EventToyJump(from)
+  for _, b in ipairs(EVENT_TOYS) do
+    if lastItem and lastItem.id == b.itemID and lastItem.t >= from.t - 20 then return true end
+    local sid = C_Item and C_Item.GetItemSpell and select(2, C_Item.GetItemSpell(b.itemID))
+    for _, cst in ipairs(casts) do
+      if cst.spellID == sid and cst.t >= from.t - 1.5 and cst.t <= from.t + 4 then return true end
+    end
+  end
+  return false
+end
+
 local function OnJump(from, to, loaded)
   if from.inst or to.inst or from.dead or from.taxi or to.taxi then return end
+  -- a summon lands wherever the summoner stands, an event toy wherever the
+  -- event is now: nothing to learn
+  if (summonAccepted and summonAccepted >= from.t - 5) or EventToyJump(from) then
+    summonAccepted = nil
+    wipe(casts)
+    lastItem = nil
+    return
+  end
   local c = ns.GetChar()
   local lc = CastBefore(from)
   local sid = lc and lc.spellID
@@ -426,7 +482,7 @@ local function OnJump(from, to, loaded)
       CleanPortals()
     end
     -- a teleport we can't cast from the planner: still never a portal link
-  elseif not AtKnownTeleport(to) then
+  elseif not AtKnownTeleport(to) and not from.groupMage and not GroupMage() then
     LearnPortal(from, to, loaded)
   end
   wipe(casts)
@@ -467,6 +523,8 @@ end
 function Travel.OnLoadingStart()
   loading = true
   preLoad = prev
+  -- (they may drop you from the group while you're loading)
+  if preLoad then preLoad.groupMage = GroupMage() end
 end
 
 function Travel.OnLoadingEnd()
@@ -787,6 +845,9 @@ function Travel.Init()
   if hooksecurefunc then
     if UseToy then hooksecurefunc("UseToy", function(id) Travel.OnItemUsed(id) end) end
     if C_ToyBox and C_ToyBox.UseToy then hooksecurefunc(C_ToyBox, "UseToy", function(id) Travel.OnItemUsed(id) end) end
+    if C_SummonInfo and C_SummonInfo.ConfirmSummon then
+      hooksecurefunc(C_SummonInfo, "ConfirmSummon", function() summonAccepted = GetTime() end)
+    end
     if C_Container and C_Container.UseContainerItem then
       hooksecurefunc(C_Container, "UseContainerItem", function(bag, slot)
         local info = C_Container.GetContainerItemInfo(bag, slot)

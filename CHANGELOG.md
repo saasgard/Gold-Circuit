@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.0
+
+### New
+- Navigation: **Dundun's Abundant Travel Method** is offered as a teleport to the current Abundance spot when you own it and it's off cooldown.
+
+### Fixes
+- Navigation: mage portals are no longer learned as travel links while another mage is in your group. A portal you cast yourself on a mage is kept as that character's teleport, so other characters don't get it.
+- Navigation: summons are no longer learned as travel links.
+- Crafting Orders: gathering professions such as Mining no longer show up after opening their window. Saved empty entries are cleared on login.
+
 ## 1.1.2
 
 ### Fixes
