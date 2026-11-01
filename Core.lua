@@ -1299,9 +1299,11 @@ function handlers.QUEST_TURNED_IN(qid, xp, money)
     c.inLog[a.key] = nil
     if c.inLogN and c.inLogN[a.key] then c.inLogN[a.key] = math.max(0, c.inLogN[a.key] - 1) end
     if s.enabled and DB.settings.announce then
-      local count = ns.ActCount(c, a)
+      local done, count = w.done, ns.ActCount(c, a)
+      -- how many Special Assignments are up comes from the map, not the setting
+      if a.key == "special" then done, count = ns.ActStatus(c, a) end
       ns.Print(string.format("%s complete on %s%s", a.name, ns.ColorName(ns.charKey, c),
-        count > 1 and string.format(" (%d/%d)", w.done, count) or ""))
+        count > 1 and string.format(" (%d/%d)", done, count) or ""))
     end
   end
   local isWQ = ns.WQ and ns.WQ.IsWorldQuest(qid)

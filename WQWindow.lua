@@ -260,7 +260,7 @@ function Win:Update()
   local saZones = ns.WQ.SAZones(c, saList)
   for _, q in ipairs(list) do
     q.dist = ns.WQ.Distance(q.qid, pc, px, py)
-    q.saZone = saZones[(tostring(q.zone or ""):lower():gsub("^the%s+", ""))] and true or false
+    q.saZone = ns.WQ.CountsForSA(q.title) and saZones[(tostring(q.zone or ""):lower():gsub("^the%s+", ""))] and true or false
   end
   if s.sort == "distance" then
     -- nearest first; quests in another area (or with no position) go last, by gold

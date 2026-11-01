@@ -54,6 +54,13 @@ local function IsWorldQuest(qid)
 end
 WQ.IsWorldQuest = IsWorldQuest
 
+-- Lairs ("Lair: Nymrissa Wavecaller") are listed as world quests but don't
+-- count toward a Special Assignment's unlock.
+local function CountsForSA(title)
+  return not (title or ""):find("^Lair:")
+end
+WQ.CountsForSA = CountsForSA
+
 -- Finds the map IDs to scan; cached per game build.
 -- Every map under the listed ones is included whatever its name or type
 -- (zone, city, sub-zone), so areas like the Coiled Isle aren't missed.
@@ -269,13 +276,14 @@ function WQ.Scan()
           DB.zones.special = e.zone
           if not DB.blocked[qid] then ns.Learn(ns.ACT_BY_KEY.special, qid, e.title) end
           -- unlock progress ("World quests completed 1/3") if the game exposes it
+          -- (an unlocked assignment's own objectives, "0/6 Altars", aren't that)
           local c = ns.GetChar()
           c.saProgress = c.saProgress or {}
           c.saProgress[qid] = nil
           if C_QuestLog.GetQuestObjectives then
             local ok, objs = pcall(C_QuestLog.GetQuestObjectives, qid)
             for _, o in ipairs(ok and objs or {}) do
-              if o.numRequired and o.numRequired > 1 then
+              if o.numRequired and o.numRequired > 1 and (o.text or ""):lower():find("world quest", 1, true) then
                 c.saProgress[qid] = { have = o.numFulfilled or 0, need = o.numRequired }
                 break
               end
@@ -386,7 +394,10 @@ function WQ.Scan()
   for _, ch in pairs(DB.chars) do
     for qid in pairs(ch.saProgress or {}) do if not list[qid] then ch.saProgress[qid] = nil end end
     for zone, log in pairs(ch.wqZoneLog or {}) do
-      for qid, t in pairs(log) do if now - t > 8 * 86400 then log[qid] = nil end end
+      for qid, t in pairs(log) do
+        local e = list[qid]
+        if now - t > 8 * 86400 or (e and not CountsForSA(e.title)) then log[qid] = nil end
+      end
       if not next(log) then ch.wqZoneLog[zone] = nil end
     end
   end
@@ -448,7 +459,7 @@ function WQ.OnTurnedIn(qid)
   local c = ns.GetChar()
   c.wqDone = c.wqDone or {}
   c.wqDone[qid] = (e and e.expires) or (time() + 7 * 86400)
-  if e and e.zone and not e.sa then
+  if e and e.zone and not e.sa and CountsForSA(e.title) then
     c.wqZoneLog = c.wqZoneLog or {}
     c.wqZoneLog[e.zone] = c.wqZoneLog[e.zone] or {}
     c.wqZoneLog[e.zone][qid] = time()
@@ -861,8 +872,8 @@ function WQ.SpecialAssignments(c)
       end
       local open = 0
       for q2, w in pairs(ns.DB.wq) do
-        if not w.sa and not w.activity and WQ.SameZone(w.zone, e.zone) and (not w.expires or w.expires > now)
-           and not (c.wqDone and c.wqDone[q2]) then open = open + 1 end
+        if not w.sa and not w.activity and CountsForSA(w.title) and WQ.SameZone(w.zone, e.zone)
+           and (not w.expires or w.expires > now) and not (c.wqDone and c.wqDone[q2]) then open = open + 1 end
       end
       out[#out + 1] = {
         qid = qid, title = e.title, short = (e.title or ""):gsub("^Special Assignment:%s*", ""),

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.2
+
+### Fixes
+- Special Assignments: Lairs (such as "Lair: Nymrissa Wavecaller") no longer count toward the unlock, in the progress, the world quests open in the zone or the SA tag in the World Quest Tracker.
+- Special Assignments: the "complete" message counts the assignments on the map, like the tracker, instead of a saved number that could be too low.
+- Special Assignments: an unlocked assignment's own objectives ("0/6 Altars destroyed") are no longer shown as world quests needed to unlock it.
+
 ## 1.1.1
 
 ### Fixes
