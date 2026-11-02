@@ -157,6 +157,7 @@ local BUILTIN_PORTALS = {
   { 2576, 0.6190, 0.7330, 2405, 0.5164, 0.7020 }, -- Harandar (The Den) -> Voidstorm
   { 2405, 0.5156, 0.7029, 2393, 0.3530, 0.6523 }, -- Voidstorm -> Silvermoon City
   { 2405, 0.5170, 0.7040, 2576, 0.6289, 0.7045 }, -- Voidstorm -> Harandar (same portal room; approximate until taken)
+  { 2541, 0.5050, 0.8070, 2393, 0.5639, 0.7073 }, -- Arcantina -> Silvermoon City (portal next to where the key lands)
   { 84, 0.5332, 0.5432, 2537, 0.2702, 0.3913, faction = "Alliance" }, -- Stormwind -> Quel'Thalas
 }
 -- Teleport toys with a fixed destination.

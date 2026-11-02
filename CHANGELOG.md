@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.0
+
+### New
+- Navigation: the **Personal Key to the Arcantina** now counts as a way to Silvermoon City, through the portal next to where it lands.
+
+### Fixes
+- Harandar: quest 90739 ("Legends of the Haranir") is no longer counted. It stays completed after the weekly reset, so characters were shown as done every week.
+
 ## 1.2.0
 
 ### New

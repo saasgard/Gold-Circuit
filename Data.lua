@@ -80,8 +80,7 @@ ns.ACTIVITIES = {
     -- pick one of these each week
     ids = { [88993] = "Legends of the Haranir", [88994] = "Legends of the Haranir",
             [88995] = "Legends of the Haranir", [88996] = "Legends of the Haranir",
-            [88997] = "Legends of the Haranir", [90739] = "Legends of the Haranir",
-            [92720] = "Legends of the Haranir" },
+            [88997] = "Legends of the Haranir", [92720] = "Legends of the Haranir" },
     pickup = { 2413, 0.54, 0.53 }, -- Harandar
     gold = 2000, minutes = 5, count = 1, enabled = true, again90 = true },
 
@@ -176,6 +175,7 @@ ns.NOT_WEEKLY = {
   [97625] = true, -- Glorious Abundance
   [91457] = true, -- Abundance: Watha'nan Crypts
   [91302] = true, -- Abundance: Abundant Grove
+  [90739] = true, -- Legends of the Haranir (stays completed, not the Harandar weekly)
 }
 
 -- Events-tab markers by area POI ID, for when the game doesn't place one
