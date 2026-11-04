@@ -77,10 +77,12 @@ ns.ACTIVITIES = {
     desc = "Legends of the Haranir weekly",
     patterns = { "Legends of the Haranir", "Haranir" },
     caches = { "Avid Learner's Supply Pack" }, cacheIDs = { [269703] = true, [279525] = true }, zone = "Harandar",
-    -- pick one of these each week
-    ids = { [88993] = "Legends of the Haranir", [88994] = "Legends of the Haranir",
-            [88995] = "Legends of the Haranir", [88996] = "Legends of the Haranir",
-            [88997] = "Legends of the Haranir", [92720] = "Legends of the Haranir" },
+    -- the weekly "The Story of ..." quests (one per week, per Wowhead);
+    -- 88993-88997 are the one-time story quests (see NOT_WEEKLY)
+    ids = { [92716] = "The Story of ...", [92719] = "The Story of ...",
+            [92720] = "The Story of Aln'hara's Bloom", [92721] = "The Story of ...",
+            [92722] = "The Story of ...", [92724] = "The Story of ...",
+            [92725] = "The Story of ..." },
     pickup = { 2413, 0.54, 0.53 }, -- Harandar
     gold = 2000, minutes = 5, count = 1, enabled = true, again90 = true },
 
@@ -176,6 +178,12 @@ ns.NOT_WEEKLY = {
   [91457] = true, -- Abundance: Watha'nan Crypts
   [91302] = true, -- Abundance: Abundant Grove
   [90739] = true, -- Legends of the Haranir (stays completed, not the Harandar weekly)
+  -- Harandar story quests: done once, they stay completed
+  [88993] = true, -- Wey'nan's Ward
+  [88994] = true, -- The Cauldron of Echoes
+  [88995] = true, -- Aln'hara's Bloom
+  [88996] = true, -- The Echoless Flame
+  [88997] = true, -- Russula's Outreach
 }
 
 -- Events-tab markers by area POI ID, for when the game doesn't place one

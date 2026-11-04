@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.3.1
+
+### Fixes
+- Harandar: the story quests (Wey'nan's Ward, Russula's Outreach, Aln'hara's Bloom, The Cauldron of Echoes, The Echoless Flame) are no longer counted. They stay completed once done, so characters that had finished them showed Harandar as done every week. Only the weekly "The Story of …" quests count now (all seven, so whichever one is up that week is recognised).
+
 ## 1.3.0
 
 ### New
