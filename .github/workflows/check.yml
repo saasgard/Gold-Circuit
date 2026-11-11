@@ -1,0 +1,25 @@
+# Checks that every Lua file compiles (WoW runs Lua 5.1), on each push and
+# pull request. The release workflow runs the same check before packaging,
+# so a typo never reaches CurseForge.
+name: Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+jobs:
+  lua-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Lua 5.1
+        run: sudo apt-get update && sudo apt-get install -y lua5.1
+      - name: Compile every Lua file
+        run: |
+          status=0
+          for f in $(git ls-files '*.lua'); do
+            luac5.1 -p "$f" || status=1
+          done
+          exit $status

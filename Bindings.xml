@@ -1,0 +1,23 @@
+<Bindings>
+  <!-- Own section in Options > Keybindings (names are set in UI.lua). -->
+
+  <!-- Clicks the Compact Tracker's Use button (works while the button is hidden). -->
+  <Binding name="CLICK GoldCircuitMiniTravelButton:LeftButton" category="Gold Circuit">
+  </Binding>
+
+  <Binding name="GOLDCIRCUIT_DASHBOARD" category="Gold Circuit">
+    if GoldCircuit and GoldCircuit.UI and GoldCircuit.UI.frame then GoldCircuit.UI:Toggle() end
+  </Binding>
+
+  <Binding name="GOLDCIRCUIT_MINI" category="Gold Circuit">
+    if GoldCircuit and GoldCircuit.UI and GoldCircuit.UI.mini then GoldCircuit.UI:ToggleMini(); GoldCircuit.Refresh() end
+  </Binding>
+
+  <Binding name="GOLDCIRCUIT_WQ" category="Gold Circuit">
+    if GoldCircuit and GoldCircuit.WQWindow and GoldCircuit.WQWindow.frame then GoldCircuit.WQWindow:Toggle() end
+  </Binding>
+
+  <Binding name="GOLDCIRCUIT_OPEN" category="Gold Circuit">
+    if GoldCircuit and GoldCircuit.Opener and GoldCircuit.Opener.frame then GoldCircuit.Opener:Toggle() end
+  </Binding>
+</Bindings>

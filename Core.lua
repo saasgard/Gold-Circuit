@@ -102,6 +102,7 @@ local DEFAULTS = {
   ledger = {},
   questIDs = {},   -- [actKey] = { [questID] = title }
   blocked = {},    -- [questID] = true (forgotten / never re-learn)
+  removedIDs = {}, -- [questID] = { act, title }: removed in the Learned quest IDs window (can be restored)
   zones = {},      -- [actKey] = learned zone name
   learned = {},    -- [actKey] = { cS, cN, qS, qN } (cache/quest gold averages)
   history = {},    -- [weekResetStamp] = { [charKey] = { i = in, o = out } }
@@ -117,7 +118,11 @@ local DEFAULTS = {
     orders = { priceSource = "auto", minProfit = 50, tsmPrice = "first(DBMinBuyout, DBMarket)" },
     wq = { enabled = true, minGold = 100, minutes = 4 },
     minimap = { angle = 215, hide = false },
-    mini = { shown = true, locked = false },
+    mini = { shown = true, locked = false, useButton = false },
+    opener = { auto = true, ignore = {} }, -- caches pop-up (Open.lua)
+    -- Compact Tracker and World Quest Tracker: hidden in combat, faded to
+    -- fadeAlpha % while the mouse isn't over them
+    windows = { hideInCombat = false, fade = false, fadeAlpha = 40 },
     cashflow = { period = "week", char = "all", src = "all", dir = "all" },
     minLevel = 80,
     announce = true,
@@ -837,6 +842,47 @@ function handlers.ADDON_LOADED(name)
     end
     DB.migrated.dntQuests = true
   end
+  -- Quests learned as a map event's (Aqir) because they were turned in
+  -- during or right after a run, e.g. "Tomes of Terror" from a nearby
+  -- Special Assignment: forget and block them, and take back the "done"
+  -- and gold they gave.
+  if not DB.migrated.eventStrayQuests then
+    for _, a in ipairs(ns.ACTIVITIES) do
+      local ids = a.mapEvent and DB.questIDs[a.key]
+      local stray = {} -- [title] = qid
+      for qid, title in pairs(ids or {}) do
+        local keep = (a.ids and a.ids[qid]) or (a.doneQuests and a.doneQuests[qid]) or ns.MatchTitle(title) == a
+        if not keep then
+          ids[qid] = nil
+          DB.blocked[qid] = true
+          stray[tostring(title)] = qid
+        end
+      end
+      if next(stray) then
+        -- "done" set by one of those turn-ins (same second)
+        for _, e in ipairs(DB.recentTurnins or {}) do
+          local c = e.char and DB.chars[e.char]
+          local w = c and c.weekly and c.weekly[a.key]
+          if w and stray[tostring(e.title)] == e.qid and (w.done or 0) >= 1 and w.at and math.abs(w.at - e.t) <= 2 then
+            w.done, w.at = 0, nil
+            if c.lastDoneWeek and c.lastDoneWeek[a.key] == c.weekReset then c.lastDoneWeek[a.key] = nil end
+          end
+        end
+        -- their quest gold: no longer this activity's
+        local L = DB.learned[a.key]
+        for _, e in ipairs(DB.ledger) do
+          if e.k == a.key and e.s == "Quest" and e.a > 0 and stray[tostring(e.d)] then
+            if L then L.qS, L.qN = math.max(0, L.qS - e.a), math.max(0, L.qN - 1) end
+            local c = DB.chars[e.c]
+            local w = c and c.weekly and c.weekly[a.key]
+            if w and c.weekReset and e.t >= c.weekReset - 7 * 86400 then w.gold = math.max(0, (w.gold or 0) - e.a) end
+            e.k = nil
+          end
+        end
+      end
+    end
+    DB.migrated.eventStrayQuests = true
+  end
   -- the Aqir reminder was on (5 min) by default in 0.12; it's opt-in now
   -- the Surplus Bag of Party Favors is the Runestones reward (it came along
   -- with the Soiree into the Apex Cache): move its gold to Runestones
@@ -1234,9 +1280,6 @@ function ns.CheckEventTurnins()
   end
 end
 
--- Last time each event was seen live (you were in it / it was on the map).
-ns.eventSeenAt = {}
-
 function handlers.QUEST_TURNED_IN(qid, xp, money)
   local title = TitleFor(qid) or (DB.wq[qid] and DB.wq[qid].title)
   -- keep the last few turn-ins for /gc events
@@ -1266,10 +1309,13 @@ function handlers.QUEST_TURNED_IN(qid, xp, money)
       doneEvents[ev.key] = true
     elseif ev.mapEvent and ns.ActSet(ev).enabled and not (ns.IsCampaign and ns.IsCampaign(qid))
        and not (title and title:find("DNT", 1, true)) then
-      local live = ns.WQ and ns.WQ.EventLive(ev, true)
-      local recently = ns.eventSeenAt[ev.key] and GetTime() - ns.eventSeenAt[ev.key] < 120
-      local named = ns.MatchTitle(title) == ev -- "Aqir Invasion" / "Aqir Assault", never "The Aqir Swarm"
-      if (live == "scenario" or live == "objective" or recently or named) and not DB.blocked[qid] then
+      -- Only the event's own quest by name ("Aqir Invasion" / "Aqir Assault",
+      -- never "The Aqir Swarm"). Other quests turned in during or right
+      -- after a run (a nearby Special Assignment's "Tomes of Terror") don't
+      -- count, and taking part without the boss kill isn't done: the reward
+      -- itself (satchel, hidden reward quest, weekly flag, Events tab) is.
+      local named = ns.MatchTitle(title) == ev
+      if named and not DB.blocked[qid] then
         ns.Learn(ev, qid, title or (ev.name .. " event"))
         ns.MarkEventDone(ev, "event quest completed")
       end
@@ -1341,8 +1387,20 @@ function handlers.UNIT_SPELLCAST_CHANNEL_STOP(...) if ns.Travel then ns.Travel.O
 function handlers.LOADING_SCREEN_ENABLED() if ns.Travel then ns.Travel.OnLoadingStart() end end
 function handlers.LOADING_SCREEN_DISABLED() if ns.Travel then ns.Travel.OnLoadingEnd() end end
 function handlers.HEARTHSTONE_BOUND() if ns.Travel then ns.Travel.OnBindChanged() end end
-function handlers.PLAYER_REGEN_DISABLED() if ns.WQWindow then ns.WQWindow:OnCombat(true) end end
-function handlers.PLAYER_REGEN_ENABLED() if ns.WQWindow then ns.WQWindow:OnCombat(false) end end
+function handlers.PLAYER_REGEN_DISABLED()
+  ns.inCombat = true -- (InCombatLockdown() is still false at this point)
+  if ns.WQWindow then ns.WQWindow:OnCombat(true) end
+  if ns.UI and ns.UI.MiniCombat then ns.UI:MiniCombat(true) end
+  if ns.Opener then ns.Opener:OnCombat(true) end
+end
+function handlers.PLAYER_REGEN_ENABLED()
+  ns.inCombat = false
+  if ns.WQWindow then ns.WQWindow:OnCombat(false) end
+  if ns.UI and ns.UI.MiniCombat then ns.UI:MiniCombat(false) end
+  if ns.Opener then ns.Opener:OnCombat(false) end
+end
+-- something openable may have arrived (caches pop-up)
+function handlers.BAG_UPDATE_DELAYED() if ns.Opener then ns.Opener.OnBagsChanged() end end
 
 function handlers.PLAYER_FLAGS_CHANGED(unit)
   if (unit == nil or unit == "player") and ns.WQ then ns.WQ.UpdateWarMode() end
@@ -1378,6 +1436,10 @@ function handlers.SUPER_TRACKING_CHANGED()
   if ns.WQ then pcall(ns.WQ.OnSuperTrack) end
   ns.Refresh()
 end
+-- a map pin set or cleared, or a key bound to the Use button: the
+-- suggested hearthstone / teleport may change
+function handlers.USER_WAYPOINT_UPDATED() ns.Refresh() end
+function handlers.UPDATE_BINDINGS() ns.Refresh() end
 
 function handlers.ZONE_CHANGED_NEW_AREA()
   if ns.WQ then ns.WQ.QueueScan(3) end
@@ -1592,17 +1654,18 @@ end
 local HELP = {
   "/gc — toggle the dashboard",
   "/gc mini — toggle the compact tracker",
+  "/gc open — pop-up to open the caches and bags in your bags",
   "/gc route — print this character's route to chat",
   "/gc done <activity> | undo <activity> — manually mark on this character (or right-click it)",
   "/gc unskip — bring back every world quest you skipped",
   "/gc learn <activity> <questID> — assign a quest ID manually",
   "/gc forget <activity> — clear learned quest IDs (and block them)",
-  "/gc ids — list learned quest IDs",
+  "/gc ids — window with the learned quest IDs per activity, each removable (list: in chat)",
   "/gc delchar <Name-Realm> — remove a character",
   "/gc wqwin — toggle the world quest tracker window",
   "/gc orders — crafting order diagnostics (what the addon can see)",
   "/gc tsmprice <source> — TSM price used for crafting reagents (default first(DBMinBuyout, DBMarket))",
-  "/gc travel — list learned hearthstone/teleports/portals (del <n>: remove one, forget: clear all)",
+  "/gc travel — window with the learned hearthstone/teleports/portals, each removable (list: in chat, del <n>: remove portal link n, forget: clear all)",
   "/gc wq — list gold world quests open on this character",
   "/gc wqscan — rescan zones for world quests",
   "/gc events [activity] — event diagnostics: the map's Events tab, markers, quests (default Aqir; e.g. /gc events abundance)",
@@ -1651,6 +1714,8 @@ local function Command(msg)
     ns.Print("Cleared learned quest IDs for " .. a.name .. ". Use /gc learn to set one manually.")
     ns.Refresh()
   elseif cmd == "ids" then
+    -- the window, unless "/gc ids list" asks for it in chat
+    if lower(a1) ~= "list" then ns.UI:ToggleQuestList() return end
     for _, a in ipairs(ns.ACTIVITIES) do
       local parts = {}
       for qid, t in pairs(DB.questIDs[a.key] or {}) do parts[#parts + 1] = qid .. " (" .. tostring(t) .. ")" end
@@ -1675,6 +1740,8 @@ local function Command(msg)
   elseif cmd == "travel" then
     if lower(a1) == "forget" then ns.Travel.Forget() return end
     if lower(a1) == "del" then ns.Travel.DeletePortal(tonumber(a2)) return end
+    -- the window, unless "/gc travel list" asks for it in chat
+    if lower(a1) ~= "list" then ns.UI:ToggleTravelList() return end
     local c = ns.GetChar()
     ns.Print("Learned travel:")
     print("  Hearthstone: " .. (c.hearth and (c.hearth.zone or "?") or "|cff888888not learned — use it once|r"))
@@ -1697,6 +1764,8 @@ local function Command(msg)
       ns.Print("TSM price source set to: " .. src)
       ns.Refresh()
     end
+  elseif cmd == "open" then
+    ns.Opener:Toggle()
   elseif cmd == "wqwin" then
     ns.WQWindow:Toggle()
   elseif cmd == "events" or cmd == "aqir" then

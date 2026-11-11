@@ -285,27 +285,12 @@ function UI:Init()
   self.headerText:SetJustifyH("RIGHT")
 
   -- flat tabs, the selected one lit up
-  self.tabButtons = {}
+  self.tabGroup = St.TabGroup(function() return UI.tab end)
   local x = 8
   for _, name in ipairs(TABS) do
-    local b = CreateFrame("Button", nil, f)
-    b:SetSize(96, 24)
+    local b = St.Tab(self.tabGroup, f, name, 96, 24, "GameFontNormal", function() UI:SelectTab(name) end)
     b:SetPoint("TOPLEFT", x, -(St.TITLE_H + 6))
     x = x + 100
-    b.bg = b:CreateTexture(nil, "BACKGROUND")
-    b.bg:SetAllPoints()
-    b.edge = b:CreateTexture(nil, "ARTWORK")
-    b.edge:SetPoint("BOTTOMLEFT")
-    b.edge:SetPoint("BOTTOMRIGHT")
-    b.edge:SetHeight(2)
-    b.edge:SetColorTexture(St.ACCENT[1], St.ACCENT[2], St.ACCENT[3], 1)
-    b.text = b:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    b.text:SetPoint("CENTER", 0, 1)
-    b.text:SetText(name)
-    b:SetScript("OnEnter", function(s) if UI.tab ~= name then s.bg:SetColorTexture(1, 1, 1, 0.10) end end)
-    b:SetScript("OnLeave", function() UI:StyleTabs() end)
-    b:SetScript("OnClick", function() UI:SelectTab(name) end)
-    self.tabButtons[name] = b
   end
   St.Line(f, St.TITLE_H + 31)
 
@@ -326,9 +311,24 @@ function UI:Init()
 
   local wqBtn = St.Button(f, 140, "World Quest Tracker", function() ns.WQWindow:Toggle() end)
   wqBtn:SetPoint("TOPRIGHT", -10, -(St.TITLE_H + 8))
+  local miniBtn = St.Button(f, 120, "Compact Tracker", function() UI:ToggleMini(); ns.Refresh() end)
+  miniBtn:SetPoint("RIGHT", wqBtn, "LEFT", -6, 0)
+  local openBtn = St.Button(f, 90, "Caches", function() ns.Opener:Toggle() end)
+  openBtn:SetPoint("RIGHT", miniBtn, "LEFT", -6, 0)
+  -- lit up while their window is open
+  self.wqButton, self.miniButton, self.openButton = wqBtn, miniBtn, openBtn
+  for _, b in ipairs({ wqBtn, miniBtn, openBtn }) do
+    b:HookScript("OnEnter", function(s)
+      GameTooltip:SetOwner(s, "ANCHOR_BOTTOM")
+      GameTooltip:AddLine(s.active and "Click to close it" or "Click to open it", 1, 1, 1)
+      GameTooltip:Show()
+    end)
+    b:HookScript("OnLeave", function() GameTooltip:Hide() end)
+  end
 
   self:CreateMini()
   if ns.WQWindow then ns.WQWindow:Create() end
+  if ns.Opener then ns.Opener:Create() end
   self:CreateMinimapButton()
   self:SelectTab(DB.settings.lastTab or "Route")
 end
@@ -338,19 +338,10 @@ function UI:SelectTab(name)
   ns.DB.settings.lastTab = name
   self.tab = name
   for n, panel in pairs(self.panels) do panel:SetShown(n == name) end
-  self:StyleTabs()
+  St.StyleTabs(self.tabGroup)
   self.scroll:SetScrollChild(self.panels[name])
   self.scroll:SetVerticalScroll(0)
   self:Update()
-end
-
-function UI:StyleTabs()
-  for n, b in pairs(self.tabButtons) do
-    local on = n == self.tab
-    b.bg:SetColorTexture(St.GOLD[1], St.GOLD[2], St.GOLD[3], on and 0.18 or 0.04)
-    b.edge:SetShown(on)
-    b.text:SetTextColor(on and 1 or 0.75, on and 1 or 0.65, on and 1 or 0.4)
-  end
 end
 
 function UI:Toggle()
@@ -373,6 +364,16 @@ end
 function UI:UpdateAll()
   self:UpdateMini()
   if ns.WQWindow then ns.WQWindow:Update() end
+  self:UpdateLists() -- learned travel / quest IDs windows, while open
+  if self.miniButton then
+    St.SetActive(self.miniButton, ns.DB.settings.mini.shown)
+    local wq = ns.WQWindow and ns.WQWindow.frame
+    St.SetActive(self.wqButton, wq and wq:IsShown())
+    local op = ns.Opener
+    local n = op and op.count or 0
+    self.openButton:SetText(n > 0 and ("Caches (" .. n .. ")") or "Caches")
+    St.SetActive(self.openButton, op and op.frame and op.frame:IsShown())
+  end
   if not self.frame:IsShown() then return end
 
   -- header summary across all characters
@@ -1076,34 +1077,72 @@ StaticPopupDialogs["GOLDCIRCUIT_FORGET_TRAVEL"] = {
   timeout = 0, whileDead = true, hideOnEscape = true,
 }
 
-function UI:BuildSetupWidgets(panel)
-  local L, edits, checks = {}, {}, {}
-  self.setupLayout, self.setupEdits, self.setupChecks = L, edits, checks
-  local DB = ns.DB
-  local y = 4
-  local COL2 = 430
+-- Setup is split into sub-tabs ("pages"); each widget belongs to one.
+local SETUP_PAGES = { "Activities", "Windows", "World quests & travel", "Crafting orders" }
+local SETUP_TOP = 36 -- first line below the sub-tab bar
 
-  local function Hdr(text, sub) L[#L + 1] = { header = text, sub = sub, y = y }; y = y + 28 end
-  local function Text(x, yy, text, w, tip) L[#L + 1] = { x = x, y = yy, text = text, w = w, tip = tip } end
+function UI:SetupPage()
+  local cur = ns.DB.settings.setupPage
+  for _, n in ipairs(SETUP_PAGES) do if n == cur then return cur end end
+  return SETUP_PAGES[1]
+end
+
+function UI:BuildSetupWidgets(panel)
+  local L, edits, checks, frames, pageH = {}, {}, {}, {}, {}
+  self.setupLayout, self.setupEdits, self.setupChecks, self.setupFrames, self.setupPageH = L, edits, checks, frames, pageH
+  local DB = ns.DB
+  local y = SETUP_TOP
+  local COL2 = 430
+  local page
+
+  -- starts the next sub-tab's widgets at the top
+  local function Page(name)
+    if page then pageH[page] = y end
+    page, y = name, SETUP_TOP
+  end
+  local function Hdr(text, sub) L[#L + 1] = { header = text, sub = sub, y = y, page = page }; y = y + 28 end
+  local function Text(x, yy, text, w, tip) L[#L + 1] = { x = x, y = yy, text = text, w = w, tip = tip, page = page } end
+  local function Own(f) f.page = page; frames[#frames + 1] = f; return f end
   local function Edit(x, yy, w, get, set)
-    local e = MakeEdit(panel, w, set)
+    local e = Own(MakeEdit(panel, w, set))
     e:SetPoint("TOPLEFT", x, -yy)
     edits[#edits + 1] = { edit = e, get = get }
   end
-  local function Check(x, yy, label, get, set)
-    local cb = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
+  -- tip: a short explanation shown when hovering the label
+  local function Check(x, yy, label, get, set, tip)
+    local cb = Own(CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate"))
     cb:SetSize(22, 22)
     cb:SetPoint("TOPLEFT", x, -(yy - 3))
     cb:SetScript("OnClick", function(self) set(self:GetChecked() and true or false); ns.Refresh() end)
     cb.get = get
     checks[#checks + 1] = cb
-    if label then Text(x + 26, yy + 2, label) end
+    if label then
+      -- (tip.w: keep the hover area clear of widgets to its right)
+      Text(x + 26, yy + 2, label, tip and (tip.w or 560) or nil, tip and function(tt)
+        tt:AddLine(tip[1], 1, 0.82, 0)
+        tt:AddLine(tip[2], 1, 1, 1, true)
+      end)
+    end
+    return cb
   end
   local function Btn(x, yy, w, text, onClick, tip)
-    local b = St.Button(panel, w, text, onClick)
+    local b = Own(St.Button(panel, w, text, onClick))
     b:SetPoint("TOPLEFT", x, -(yy - 1))
     if tip then Tip(b, tip) end
     return b
+  end
+
+  -- sub-tab bar, the chosen one lit up (like the dashboard's tabs)
+  self.setupTabGroup = St.TabGroup(function() return UI:SetupPage() end)
+  local tx = 0
+  for _, name in ipairs(SETUP_PAGES) do
+    local b = St.Tab(self.setupTabGroup, panel, name, 160, 24, "GameFontNormalSmall", function()
+      DB.settings.setupPage = name
+      if UI.scroll then UI.scroll:SetVerticalScroll(0) end
+      UI:Update()
+    end)
+    b:SetPoint("TOPLEFT", tx, -2)
+    tx = tx + 164
   end
   -- label on the left, number box at x=330, grey note after it
   local function Row(label, w, get, set, note)
@@ -1114,6 +1153,7 @@ function UI:BuildSetupWidgets(panel)
   end
 
   -- Activities
+  Page("Activities")
   Hdr("Activities", "untick what you don't do  ·  hover a name for details")
   Text(34, y, GREY .. "Activity|r"); Text(300, y, GREY .. "Gold|r"); Text(372, y, GREY .. "Minutes|r")
   Text(436, y, GREY .. "Per week|r"); Text(510, y, GREY .. "Gold per completion used|r")
@@ -1160,33 +1200,77 @@ function UI:BuildSetupWidgets(panel)
       "Use your real average gold for this activity (once tracked) instead of the typed value.")
     if a.kind ~= "crafting" then
       Btn(752, y, 80, "Forget IDs", function() SlashCmdList.GOLDCIRCUIT("forget " .. a.key) end,
-        "Clear the learned quest IDs for this activity and never learn them again. Use it if a wrong quest was matched.")
+        "Clear all learned quest IDs for this activity and never learn them again. To remove just one, use Show quest IDs below.")
     end
     y = y + 24
   end
+  y = y + 4
+  -- under the Use avg / Forget IDs columns, as wide as both
+  Btn(676, y, 156, "Show quest IDs", function() UI:ToggleQuestList(true) end,
+    "Every learned quest ID per activity, with a Remove button for one matched to the wrong activity (and Restore to undo it). Also /gc ids.")
+  y = y + 24
 
   -- Windows
-  y = y + 6
-  Hdr("Windows")
-  Check(6, y, "Compact tracker (what's left on this character)", function() return DB.settings.mini.shown end,
+  Page("Windows")
+  Hdr("Windows", "also on the dashboard's buttons, top right")
+  Check(6, y, "Compact Tracker (what's left on this character)", function() return DB.settings.mini.shown end,
     function(v) DB.settings.mini.shown = v end)
   Check(COL2, y, "Lock its position", function() return DB.settings.mini.locked end, function(v) DB.settings.mini.locked = v end)
   y = y + 24
-  Check(6, y, "World quest tracker window", function() return DB.settings.wqWin and DB.settings.wqWin.shown end,
+  -- only does anything while the compact tracker is on
+  local miniOn = function() return DB.settings.mini.shown end
+  local useCb = Check(30, y, function()
+    return (miniOn() and "" or GREY) .. "Hearthstone / teleport button (while the World Quest Tracker is closed)" .. (miniOn() and "" or "|r")
+  end, function() return DB.settings.mini.useButton end, function(v) DB.settings.mini.useButton = v end,
+    { "Hearthstone / teleport button", "A button at the bottom of the Compact Tracker that uses the hearthstone or teleport the directions suggest for your tracked world quest or map pin. Greyed out with a countdown while it's on cooldown. A key can be bound to it in Options > Keybindings > Gold Circuit (General > Set keys), and the key works even when the button is hidden." })
+  useCb.enabled = miniOn
+  y = y + 24
+  Check(6, y, "World Quest Tracker", function() return DB.settings.wqWin and DB.settings.wqWin.shown end,
     function(v) ns.WQWindow:Toggle(v) end)
   Check(COL2, y, "Lock its position", function() return DB.settings.wqWin and DB.settings.wqWin.locked end,
     function(v) DB.settings.wqWin.locked = v end)
   y = y + 24
+  Check(6, y, "Caches pop-up (when something openable arrives)", function() return DB.settings.opener.auto end,
+    function(v) DB.settings.opener.auto = v end,
+    { "Caches pop-up", "Lists the caches, bags and boxes in your bags that can be opened, Gold Circuit's weekly caches first: click a row to open one. Off: it only opens with the dashboard's Caches button or /gc open. Right-click an item in it to never show that item again.", w = COL2 - 40 })
+  Btn(COL2, y, 150, "Show hidden items", function() ns.Opener:ClearIgnored() end,
+    "Items you right-clicked in the caches pop-up are listed there again.")
+  Text(COL2 + 158, y + 3, function() return GREY .. ns.Opener.IgnoredCount() .. " hidden|r" end)
+  y = y + 24
   Check(6, y, "Minimap button", function() return not DB.settings.minimap.hide end,
     function(v) DB.settings.minimap.hide = not v; UI:UpdateMinimap() end)
-  Check(COL2, y, "Chat messages (off: only /gc replies and warnings)", function() return DB.settings.announce end,
+  y = y + 26
+
+  -- the two trackers that stay on screen while you play
+  y = y + 6
+  Hdr("Trackers", "the Compact Tracker and World Quest Tracker")
+  local ws = DB.settings.windows
+  Check(6, y, "Hide in combat", function() return ws.hideInCombat end, function(v) ws.hideInCombat = v end,
+    { "Hide in combat", "Both trackers disappear when combat starts and come back when it ends. Their buttons can't be used in combat anyway.", w = COL2 - 40 })
+  Check(COL2, y, "Fade when the mouse isn't over them", function() return ws.fade end, function(v) ws.fade = v end,
+    { "Fade", "Both trackers turn see-through while the mouse isn't over them, and back to full as soon as you point at one." })
+  y = y + 26
+  Row("Faded opacity (%)", 34, function() return ws.fadeAlpha or 40 end,
+    function(v) ws.fadeAlpha = math.max(10, math.min(100, v)) end, "10 = barely visible, 100 = no fading")
+
+  -- General
+  y = y + 6
+  Hdr("General")
+  Check(6, y, "Chat messages (off: only /gc replies and warnings)", function() return DB.settings.announce end,
     function(v) DB.settings.announce = v end)
   y = y + 26
   Row("Hide characters below level", 34, function() return DB.settings.minLevel or 0 end,
     function(v) DB.settings.minLevel = v end, "in the Alts grid and the alt queue")
+  Text(14, y + 3, function()
+    local key = GetBindingKey and GetBindingKey("CLICK GoldCircuitMiniTravelButton:LeftButton")
+    return "Key bindings" .. GREY .. "  (hearthstone / teleport: " .. (key and GetBindingText(key) or "not set") .. ")|r"
+  end)
+  Btn(330, y, 120, "Set keys", function() UI:OpenKeybindings() end,
+    "Opens the game's Key Bindings, where Gold Circuit has its own section: hearthstone / teleport, dashboard, both trackers and the caches pop-up.")
+  y = y + 24
 
   -- World quests
-  y = y + 6
+  Page("World quests & travel")
   Hdr("World quests")
   Check(6, y, "Track gold world quests", function() return DB.settings.wq.enabled end,
     function(v) DB.settings.wq.enabled = v; if v then ns.WQ.QueueScan(0.5) end end)
@@ -1213,7 +1297,7 @@ function UI:BuildSetupWidgets(panel)
   Hdr("Events", "Aqir")
   local aqir = ns.ACT_BY_KEY.aqir
   Row("Remind me before it starts (minutes, 0 = off)", 34, function() return ns.ActSet(aqir).remind or 0 end,
-    function(v) ns.ActSet(aqir).remind = math.max(0, math.min(60, v)) end, "only while Aqir is ticked above and not done this week")
+    function(v) ns.ActSet(aqir).remind = math.max(0, math.min(60, v)) end, "only while Aqir is ticked in Activities and not done this week")
   Check(6, y, "Play a sound with the reminder", function() return DB.settings.remindSound end, function(v) DB.settings.remindSound = v end)
   y = y + 26
   Text(14, y + 3, function()
@@ -1240,14 +1324,16 @@ function UI:BuildSetupWidgets(panel)
   Text(14, y + 3, function()
     local nTele = 0
     for _ in pairs(DB.travel.tele) do nTele = nTele + 1 end
-    return string.format("Learned: %d portal links, %d teleports", #DB.travel.portals, nTele) .. GREY .. "  (/gc travel lists them)|r"
+    return string.format("Learned: %d portal links, %d teleports", #DB.travel.portals, nTele)
   end)
-  Btn(330, y, 120, "Forget travel", function() StaticPopup_Show("GOLDCIRCUIT_FORGET_TRAVEL") end,
+  Btn(330, y, 120, "Show list", function() UI:ToggleTravelList(true) end,
+    "Everything learned (hearthstone, teleports, portal links), with a Remove button for each. Also /gc travel.")
+  Btn(456, y, 120, "Forget travel", function() StaticPopup_Show("GOLDCIRCUIT_FORGET_TRAVEL") end,
     "Forget every learned hearthstone, teleport and portal link. They're learned again as you travel.")
   y = y + 24
 
   -- Crafting orders
-  y = y + 6
+  Page("Crafting orders")
   Hdr("Crafting orders")
   local ord = DB.settings.orders
   Row("Minimum profit per order (gold)", 50, function() return ord.minProfit or 0 end, function(v) ord.minProfit = v end)
@@ -1263,29 +1349,38 @@ function UI:BuildSetupWidgets(panel)
     local using = ns.Prices.Source()
     return using and (GREY .. "using " .. using .. "|r") or (RED .. "no price addon loaded|r")
   end)
-  y = y + 32
-  Text(4, y, GREY .. "All slash commands: /gc help|r")
-  self.setupHeight = y + 24
+  y = y + 24
+  Page(nil) -- (stores the last page's height)
 end
 
 function UI:RenderSetup(p)
   Begin(p)
   if not self.setupLayout then self:BuildSetupWidgets(p.parent) end
+  local cur = self:SetupPage()
+  St.StyleTabs(self.setupTabGroup)
   for _, l in ipairs(self.setupLayout) do
-    if l.header then
+    if l.page ~= cur then
+      -- another sub-tab
+    elseif l.header then
       Header(p, l.y, l.header, l.sub)
     else
       T(p, l.x, l.y, type(l.text) == "function" and l.text() or l.text, l.w)
       if l.tip then Hot(p, l.x - 2, l.y - 3, l.w or 200, 18, l.tip) end
     end
   end
+  for _, f in ipairs(self.setupFrames) do f:SetShown(f.page == cur) end
+  local h = self.setupPageH[cur] or SETUP_TOP
+  T(p, 4, h + 8, GREY .. "All slash commands: /gc help|r")
   for _, e in ipairs(self.setupEdits) do
     if not e.edit:HasFocus() then e.edit:SetText(tostring(e.get() or 0)) end
   end
-  for _, cb in ipairs(self.setupChecks) do cb:SetChecked(cb.get() and true or false) end
+  for _, cb in ipairs(self.setupChecks) do
+    cb:SetChecked(cb.get() and true or false)
+    if cb.enabled then cb:SetEnabled(cb.enabled() and true or false) end
+  end
   local names = { auto = "Auto", tsm = "TradeSkillMaster", auctionator = "Auctionator" }
   self.priceSourceButton:SetText(names[ns.DB.settings.orders.priceSource or "auto"] or "Auto")
-  return self.setupHeight
+  return h + 32
 end
 
 ------------------------------------------------------------------------
@@ -1293,30 +1388,189 @@ end
 ------------------------------------------------------------------------
 function UI:CreateMini()
   local DB = ns.DB
-  local m = CreateFrame("Frame", "GoldCircuitMini", UIParent, "BackdropTemplate")
+  local m, close = St.MovableWindow({
+    name = "GoldCircuitMini", title = "Gold Circuit", w = MINI_W, h = 60,
+    posTable = DB.settings, posKey = "miniPos", default = { "RIGHT", "RIGHT", -40, 120 },
+    locked = function() return DB.settings.mini.locked end,
+    onClose = function() DB.settings.mini.shown = false; UI:UpdateMini() end,
+  })
   self.mini = m
-  m:SetSize(MINI_W, 60)
-  m:SetFrameStrata("MEDIUM")
-  m:SetClampedToScreen(true)
-  m:SetMovable(true)
-  m:EnableMouse(true)
-  m:RegisterForDrag("LeftButton")
-  m:SetScript("OnDragStart", function(s) if not DB.settings.mini.locked then s:StartMoving() end end)
-  m:SetScript("OnDragStop", function(s)
-    s:StopMovingOrSizing()
-    local point, _, rel, x, y = s:GetPoint()
-    DB.settings.miniPos = { point, rel, x, y }
-  end)
   m:SetScript("OnMouseUp", function(_, button) if button == "RightButton" then UI:Toggle() end end)
-  local pos = DB.settings.miniPos
-  if pos then m:SetPoint(pos[1], UIParent, pos[2], pos[3], pos[4]) else m:SetPoint("RIGHT", UIParent, "RIGHT", -40, 120) end
-  St.Window(m)
-  St.TitleBar(m, "Gold Circuit")
-  local close = St.Close(m, function() DB.settings.mini.shown = false; UI:UpdateMini() end)
   m.sub = m:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   m.sub:SetPoint("RIGHT", close, "LEFT", -6, 0)
   m.sub:SetJustifyH("RIGHT")
   self.miniPool = NewPool(m)
+
+  -- Optional secure "Use" button under the rows: casts the hearthstone /
+  -- teleport the directions suggest while the World Quest Tracker (which has
+  -- its own) is closed.
+  local use = St.UseButton(m, "GoldCircuitMiniTravelButton", MINI_W - 16, "", function(b, tt)
+    tt:AddLine(b.label or "Use", 1, 0.82, 0)
+    if b.readyAt then
+      tt:AddLine("On cooldown: the fastest way to your tracked world quest or map pin once it's ready.", 0.7, 0.7, 0.7, true)
+    else
+      tt:AddLine("Casts it for you: the fastest way to your tracked world quest or map pin.", 0.7, 0.7, 0.7, true)
+    end
+    tt:AddLine("Set a key for it in Options > Keybindings > Gold Circuit.", 0.6, 0.6, 0.6, true)
+  end)
+  -- counts down while the suggestion is on cooldown, then refreshes
+  local tick = 0
+  use:HookScript("OnUpdate", function(b, dt)
+    if not b.readyAt then return end
+    tick = tick + dt
+    if tick < 1 then return end
+    tick = 0
+    local left = b.readyAt - GetTime()
+    if left <= 0 then
+      b.readyAt = nil
+      ns.Refresh()
+    else
+      b:SetText(GREY .. (b.label or "?") .. "  (" .. ns.Duration(left) .. ")|r")
+    end
+  end)
+  self.miniUse = use
+  UI.AttachFade(m, { use }) -- fades while the mouse isn't over it (Setup > Windows > Trackers)
+
+  -- While you move, check every few seconds whether the suggestion changed
+  -- (the rest of the tracker keeps its usual refresh).
+  local elapsed, idle, lastY, lastX = 0, 0, nil, nil
+  m:HookScript("OnUpdate", function(_, dt)
+    elapsed = elapsed + dt
+    if elapsed < 3 then return end
+    idle = idle + elapsed
+    elapsed = 0
+    if InCombatLockdown and InCombatLockdown() then return end
+    local y, x = ns.PlayerYX()
+    local moved = not y or y ~= lastY or x ~= lastX
+    lastY, lastX = y, x
+    if not (moved or idle >= 15) then return end
+    idle = 0
+    if UI.MiniUseSignature() ~= use.sig then ns.Refresh() end
+  end)
+end
+
+local USE_BINDING = "CLICK GoldCircuitMiniTravelButton:LeftButton"
+-- Options > Keybindings > Gold Circuit (Bindings.xml)
+_G["BINDING_NAME_" .. USE_BINDING] = "Use hearthstone / teleport"
+BINDING_NAME_GOLDCIRCUIT_DASHBOARD = "Open / close the dashboard"
+BINDING_NAME_GOLDCIRCUIT_MINI = "Show / hide the Compact Tracker"
+BINDING_NAME_GOLDCIRCUIT_WQ = "Show / hide the World Quest Tracker"
+BINDING_NAME_GOLDCIRCUIT_OPEN = "Open / close the caches pop-up"
+
+local function UseKeyBound()
+  return GetBindingKey and GetBindingKey(USE_BINDING) ~= nil
+end
+
+-- Should the compact tracker show its Use button (tracker shown, option on,
+-- World Quest Tracker closed)?
+local function MiniUseVisible()
+  local s = ns.DB.settings.mini
+  if not (s.useButton and s.shown) then return false end
+  local wq = ns.WQWindow and ns.WQWindow.frame
+  return not (wq and wq:IsShown())
+end
+
+-- What the Use button (and its key) should cast now: tele, cooling.
+-- Only worked out while the button is wanted or a key is bound to it.
+local function MiniTele()
+  if not (ns.WQWindow and ns.WQWindow.SuggestedTele) then return end
+  if not (MiniUseVisible() or UseKeyBound()) then return end
+  return ns.WQWindow.SuggestedTele()
+end
+
+-- Identifies what the button shows, to notice when it changes.
+local function UseSignature(tele, cooling)
+  if not tele then return nil end
+  return (tele.key or tele.label or "?") .. (cooling and ":cd" or "") .. (MiniUseVisible() and ":v" or "")
+end
+
+function UI.MiniUseSignature() return UseSignature(MiniTele()) end
+
+-- Sets what the Use button (and its key) casts, and places it at y on the
+-- compact tracker when it should show there (y = nil: never shown).
+-- Returns the height it takes on the tracker.
+function UI:SetMiniUse(y)
+  local b = self.miniUse
+  if not b or (InCombatLockdown and InCombatLockdown()) then return 0 end -- can't touch secure frames now
+  local tele, cooling = MiniTele()
+  local show = tele and y and MiniUseVisible()
+  b.sig = UseSignature(tele, cooling)
+  if tele and not cooling then
+    b:SetAttribute("type", "macro")
+    b:SetAttribute("macrotext", ns.WQWindow.MacroFor(tele))
+  else
+    b:SetAttribute("type", nil) -- nothing to cast (or not ready): the key does nothing
+    b:SetAttribute("macrotext", nil)
+  end
+  b.label = tele and tele.label or nil
+  b.readyAt = cooling and (GetTime() + (tele.cooldown or 0)) or nil
+  if not show then
+    b:Hide()
+    b:ClearAllPoints()
+    return 0
+  end
+  if cooling then
+    b:SetText(GREY .. (tele.label or "?") .. "  (" .. ns.Duration(tele.cooldown or 0) .. ")|r")
+  else
+    b:SetText("Use " .. (tele.label or tele.name or "?"))
+  end
+  b:ClearAllPoints()
+  b:SetPoint("TOPLEFT", self.mini, "TOPLEFT", 8, -(y + 4))
+  b:SetFrameLevel(self.mini:GetFrameLevel() + 10)
+  b:Show()
+  return b:GetHeight() + 8
+end
+
+-- Opens the game's Key Bindings (Setup > Windows > Set keys). The dashboard
+-- closes so it doesn't cover them.
+function UI:OpenKeybindings()
+  if InCombatLockdown and InCombatLockdown() then ns.Print("Key bindings can't be opened in combat.") return end
+  if self.frame and self.frame:IsShown() then self.frame:Hide() end
+  if Settings and Settings.OpenToCategory and Settings.KEYBINDINGS_CATEGORY_ID then
+    Settings.OpenToCategory(Settings.KEYBINDINGS_CATEGORY_ID)
+  elseif SettingsPanel then
+    ShowUIPanel(SettingsPanel)
+  end
+  ns.Print("Gold Circuit's keys have their own section in the list.")
+end
+
+-- Fades a tracker while the mouse isn't over it (Setup > Windows >
+-- Trackers), easing in and out. extras: frames that belong to it but sit
+-- outside it (its secure Use button), faded along and counted as "over".
+function UI.AttachFade(frame, extras)
+  local t = 0
+  frame:HookScript("OnUpdate", function(f, dt)
+    t = t + dt
+    if t < 0.05 then return end
+    t = 0
+    local s = ns.DB.settings.windows
+    local old = f:GetAlpha()
+    if not s.fade and old == 1 then return end -- (fading off: nothing to do)
+    local target = 1
+    if s.fade then
+      local over = f:IsMouseOver()
+      for _, e in ipairs(extras or {}) do
+        if e:IsShown() and e:IsMouseOver() then over = true end
+      end
+      if not over then target = math.max(10, math.min(100, s.fadeAlpha or 40)) / 100 end
+    end
+    local cur = math.abs(old - target) < 0.02 and target or old + (target - old) * 0.35
+    if cur ~= old then f:SetAlpha(cur) end
+    -- (secure buttons aren't touched in combat; they're hidden then anyway)
+    if not (InCombatLockdown and InCombatLockdown()) then
+      for _, e in ipairs(extras or {}) do
+        if e:GetAlpha() ~= cur then e:SetAlpha(cur) end
+      end
+    end
+  end)
+end
+
+function UI:MiniCombat(inCombat)
+  -- PLAYER_REGEN_DISABLED fires just before lockdown: last chance to detach
+  if inCombat and self.miniUse then self.miniUse:Hide(); self.miniUse:ClearAllPoints() end
+  -- Setup > Windows > Trackers: hide right away (UpdateMini keeps it hidden)
+  if inCombat and self.mini and ns.DB.settings.windows.hideInCombat then self.mini:Hide() end
+  ns.Refresh()
 end
 
 function UI:ToggleMini()
@@ -1330,7 +1584,11 @@ end
 function UI:UpdateMini()
   local m = self.mini
   if not m then return end
-  if not ns.DB.settings.mini.shown then m:Hide() return end
+  if not ns.DB.settings.mini.shown or (ns.inCombat and ns.DB.settings.windows.hideInCombat) then
+    m:Hide()
+    self:SetMiniUse(nil) -- a key bound to the Use button still works
+    return
+  end
   m:Show()
   local MW = MINI_W
   local IN = 8              -- inner margin
@@ -1411,6 +1669,8 @@ function UI:UpdateMini()
     T(p, IN + 150, y + 2, ns.Money(r.gold), RW - 152, "RIGHT")
     y = y + 16
   end
+  -- optional hearthstone / teleport button at the bottom
+  y = y + self:SetMiniUse(y)
   m:SetHeight(y + 6)
 end
 
@@ -1523,3 +1783,268 @@ function UI:UpdateMinimap()
   b:ClearAllPoints()
   b:SetPoint("CENTER", Minimap, "CENTER", math.cos(angle) * radius, math.sin(angle) * radius)
 end
+
+------------------------------------------------------------------------
+-- List windows: rows with a label, a grey note and one button (Remove /
+-- Restore), in sections. Used for learned travel and learned quest IDs.
+--   spec = { name, title, hint, posKey, build = function() return items end }
+--   items: { header = "..." } | { empty = "..." } |
+--          { label, note, button, onButton, onClick, tooltip = fn(tt) }
+------------------------------------------------------------------------
+local LW_W, LW_ROW, LW_VIEW = 480, 20, 400
+UI.lists = {}
+
+local function ListRowTooltip(r)
+  local e = r.entry
+  if not (e and e.tooltip) then return end
+  GameTooltip:SetOwner(r, "ANCHOR_RIGHT")
+  e.tooltip(GameTooltip)
+  GameTooltip:Show()
+end
+
+local function ListRow(f, i)
+  local r = f.rows[i]
+  if r then return r end
+  r = CreateFrame("Button", nil, f.content)
+  r:SetHeight(LW_ROW)
+  r.bg = r:CreateTexture(nil, "BACKGROUND")
+  r.bg:SetAllPoints()
+  r.hl = r:CreateTexture(nil, "HIGHLIGHT")
+  r.hl:SetAllPoints()
+  r.hl:SetColorTexture(St.HOVER[1], St.HOVER[2], St.HOVER[3], St.HOVER[4])
+  r.edge = r:CreateTexture(nil, "ARTWORK")
+  r.edge:SetPoint("TOPLEFT")
+  r.edge:SetPoint("BOTTOMLEFT")
+  r.edge:SetWidth(2)
+  r.edge:SetColorTexture(St.ACCENT[1], St.ACCENT[2], St.ACCENT[3], 1)
+  r.button = St.Button(r, 64, "", function()
+    local e = r.entry
+    if e and e.onButton then e.onButton(); UI:UpdateList(f.spec) end
+  end)
+  r.button:SetHeight(16)
+  r.button:SetPoint("RIGHT", -4, 0)
+  r.note = r:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+  r.note:SetPoint("RIGHT", -76, 0)
+  r.note:SetWidth(130)
+  r.note:SetJustifyH("RIGHT")
+  r.note:SetWordWrap(false)
+  r.label = r:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  r.label:SetPoint("LEFT", 8, 0)
+  r.label:SetPoint("RIGHT", r.note, "LEFT", -6, 0)
+  r.label:SetJustifyH("LEFT")
+  r.label:SetWordWrap(false)
+  r:SetScript("OnEnter", ListRowTooltip)
+  r:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  r:SetScript("OnClick", function(b) if b.entry and b.entry.onClick then b.entry.onClick() end end)
+  f.rows[i] = r
+  return r
+end
+
+function UI:CreateList(spec)
+  local f = self.lists[spec.name]
+  if f then return f end
+  f = St.MovableWindow({
+    name = spec.name, title = spec.title, w = LW_W, h = 120,
+    strata = "DIALOG", -- above the dashboard (opened from its Setup tab)
+    posTable = ns.DB.settings, posKey = spec.posKey, default = { "CENTER", "CENTER", 0, 60 },
+    escape = true,
+  })
+  self.lists[spec.name] = f
+  f.spec = spec
+
+  local scroll = CreateFrame("ScrollFrame", nil, f)
+  scroll:SetPoint("TOPLEFT", 8, -(St.TITLE_H + 6))
+  scroll:SetPoint("BOTTOMRIGHT", -24, 26)
+  local content = CreateFrame("Frame", nil, scroll)
+  content:SetSize(LW_W - 32, 10)
+  scroll:SetScrollChild(content)
+  f.content = content
+  f.bar = St.ScrollBar(f, scroll)
+
+  local hint = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+  hint:SetPoint("BOTTOMLEFT", 10, 8)
+  hint:SetWidth(LW_W - 20)
+  hint:SetJustifyH("LEFT")
+  hint:SetWordWrap(false)
+  hint:SetText(spec.hint or "")
+  f.rows = {}
+  f:Hide()
+  return f
+end
+
+function UI:UpdateList(spec)
+  local f = self.lists[spec.name]
+  if not (f and f:IsShown()) then return end
+  local items = spec.build()
+  local y, w, stripe = 0, LW_W - 32, 0
+  local sr, sg, sb, sa = St.SectionColors()
+  for i, e in ipairs(items) do
+    local r = ListRow(f, i)
+    if e.header and i > 1 then y = y + 6 end
+    local entry = (not e.header and not e.empty) and e or nil
+    r.entry = entry
+    r:ClearAllPoints()
+    r:SetPoint("TOPLEFT", 0, -y)
+    r:SetWidth(w)
+    r.hl:SetShown(entry ~= nil and (entry.onClick ~= nil or entry.tooltip ~= nil))
+    r.button:SetShown(entry ~= nil and entry.button ~= nil)
+    r.button:SetText(entry and entry.button or "")
+    r.edge:SetShown(e.header ~= nil)
+    if e.header then
+      stripe = 0
+      r.bg:SetColorTexture(sr, sg, sb, sa)
+      r.label:SetText(St.SECTION_TEXT .. e.header .. "|r")
+      r.note:SetText(e.note or "")
+    elseif e.empty then
+      r.bg:SetColorTexture(1, 1, 1, 0)
+      r.label:SetText(GREY .. e.empty .. "|r")
+      r.note:SetText("")
+    else
+      stripe = stripe + 1
+      r.bg:SetColorTexture(1, 1, 1, stripe % 2 == 0 and St.STRIPE_A or 0)
+      r.label:SetText(e.label)
+      r.note:SetText(e.note or "")
+    end
+    r:Show()
+    y = y + LW_ROW
+  end
+  for i = #items + 1, #f.rows do f.rows[i]:Hide(); f.rows[i].entry = nil end
+  f.content:SetHeight(math.max(10, y))
+  f:SetHeight(math.min(y, LW_VIEW) + St.TITLE_H + 6 + 30)
+  C_Timer.After(0, f.bar.Update)
+end
+
+function UI:ToggleList(spec, force)
+  local f = self:CreateList(spec)
+  if force == nil then force = not f:IsShown() end
+  f:SetShown(force)
+  if force then self:UpdateList(spec) end
+end
+
+-- Refreshes the open list windows (from UI:UpdateAll).
+function UI:UpdateLists()
+  for _, f in pairs(self.lists) do
+    if f:IsShown() then self:UpdateList(f.spec) end
+  end
+end
+
+------------------------------------------------------------------------
+-- Learned travel: the hearthstone, teleports and portal links the addon
+-- has learned (/gc travel, Setup > World quests & travel > Show list).
+------------------------------------------------------------------------
+local function PointText(p)
+  return p and string.format("%s (%.1f, %.1f)", p.zone or "?", (p.mx or 0) * 100, (p.my or 0) * 100) or "?"
+end
+
+local TRAVEL_LIST = {
+  name = "GoldCircuitTravelFrame", title = "Learned travel", posKey = "travelListPos",
+  hint = "Click a portal link to pin its entrance on the map.  Removed ones are learned again when you take them.",
+  build = function()
+    local list = ns.Travel.Learned()
+    local items = {}
+    local function Section(title, kind, empty)
+      items[#items + 1] = { header = title }
+      local n = 0
+      for _, e in ipairs(list) do
+        if e.kind == kind then
+          n = n + 1
+          items[#items + 1] = {
+            label = e.label, note = e.note, button = "Remove",
+            onButton = function() ns.Travel.Remove(e) end,
+            onClick = e.portal and function() ns.Travel.SetPortalPin(e.portal) end or nil,
+            tooltip = function(tt)
+              tt:AddLine(e.label, 1, 0.82, 0)
+              if e.portal then
+                tt:AddDoubleLine("Entrance", PointText(e.portal.from), 0.7, 0.7, 0.7, 1, 1, 1)
+                tt:AddDoubleLine("Lands", PointText(e.portal.to), 0.7, 0.7, 0.7, 1, 1, 1)
+                if e.portal.t then tt:AddDoubleLine("Last taken", date("%d %b %Y", e.portal.t), 0.7, 0.7, 0.7, 1, 1, 1) end
+              else
+                tt:AddDoubleLine("Lands", PointText(e.point), 0.7, 0.7, 0.7, 1, 1, 1)
+              end
+              if e.note then tt:AddLine(e.note, 1, 0.6, 0.3) end
+              tt:AddLine(" ")
+              if e.portal then tt:AddLine("Click: pin the entrance on the map", 0.6, 0.6, 0.6) end
+              tt:AddLine("Remove: forget it (it's learned again if you use it again)", 0.6, 0.6, 0.6, true)
+            end,
+          }
+        end
+      end
+      if n == 0 then items[#items + 1] = { empty = empty } end
+    end
+    Section("Hearthstone (this character)", "hearth", "Not learned yet: use your Hearthstone once.")
+    Section("Teleports", "tele", "None learned yet: use a teleport spell or toy once.")
+    Section("Portal links", "portal", "None learned yet: take a portal once.")
+    return items
+  end,
+}
+
+function UI:ToggleTravelList(force) self:ToggleList(TRAVEL_LIST, force) end
+
+------------------------------------------------------------------------
+-- Learned quest IDs: which quests count for each activity, with Remove
+-- (blocks the ID, so it isn't learned again) and Restore for removed ones
+-- (/gc ids, Setup > Activities > Show quest IDs).
+------------------------------------------------------------------------
+local QUEST_LIST = {
+  name = "GoldCircuitQuestIDFrame", title = "Learned quest IDs", posKey = "questListPos",
+  hint = "Remove a quest matched to the wrong activity: it isn't learned again unless you restore it.",
+  build = function()
+    local DB = ns.DB
+    local items = {}
+    for _, a in ipairs(ns.ACTIVITIES) do
+      if a.kind ~= "crafting" then
+        local ids = {}
+        for qid, title in pairs(DB.questIDs[a.key] or {}) do ids[#ids + 1] = { qid = qid, title = tostring(title) } end
+        table.sort(ids, function(x, y) return x.qid < y.qid end)
+        items[#items + 1] = { header = a.name, note = #ids > 0 and (#ids .. (#ids == 1 and " quest" or " quests")) or nil }
+        for _, q in ipairs(ids) do
+          local builtIn = a.ids and a.ids[q.qid]
+          items[#items + 1] = {
+            label = q.qid .. "  " .. GREY .. q.title .. "|r", note = builtIn and "built in" or "learned", button = "Remove",
+            onButton = function()
+              if DB.questIDs[a.key] then DB.questIDs[a.key][q.qid] = nil end
+              DB.blocked[q.qid] = true
+              DB.removedIDs[q.qid] = { act = a.key, title = q.title }
+              ns.Print(string.format("Removed quest %d (%s) from %s. It won't be learned again (Restore in the Learned quest IDs window).", q.qid, q.title, a.name))
+              ns.Refresh()
+            end,
+            tooltip = function(tt)
+              tt:AddLine(q.title, 1, 0.82, 0)
+              tt:AddDoubleLine("Quest ID", q.qid, 0.7, 0.7, 0.7, 1, 1, 1)
+              tt:AddDoubleLine("Counts for", a.name, 0.7, 0.7, 0.7, 1, 1, 1)
+              tt:AddLine(builtIn and "Comes with the addon." or "Learned when you did it.", 0.6, 0.6, 0.6)
+              tt:AddLine(" ")
+              tt:AddLine("Remove: it no longer counts for " .. a.name .. " and isn't learned again (Restore undoes it).", 0.6, 0.6, 0.6, true)
+            end,
+          }
+        end
+        if #ids == 0 then items[#items + 1] = { empty = "None learned yet: they're learned when you do it." } end
+      end
+    end
+    -- removed here, so they can be put back
+    local removed = {}
+    for qid, r in pairs(DB.removedIDs) do removed[#removed + 1] = { qid = qid, act = ns.ACT_BY_KEY[r.act], title = r.title } end
+    if #removed > 0 then
+      table.sort(removed, function(x, y) return x.qid < y.qid end)
+      items[#items + 1] = { header = "Removed" }
+      for _, q in ipairs(removed) do
+        items[#items + 1] = {
+          label = q.qid .. "  " .. GREY .. tostring(q.title) .. "|r", note = q.act and q.act.name or "?", button = "Restore",
+          onButton = function()
+            DB.blocked[q.qid] = nil
+            DB.removedIDs[q.qid] = nil
+            if q.act then ns.Learn(q.act, q.qid, q.title) end
+            ns.Refresh()
+          end,
+          tooltip = function(tt)
+            tt:AddLine(tostring(q.title), 1, 0.82, 0)
+            tt:AddLine("Restore: counts for " .. (q.act and q.act.name or "?") .. " again.", 0.6, 0.6, 0.6, true)
+          end,
+        }
+      end
+    end
+    return items
+  end,
+}
+
+function UI:ToggleQuestList(force) self:ToggleList(QUEST_LIST, force) end

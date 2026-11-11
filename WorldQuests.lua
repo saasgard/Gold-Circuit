@@ -1383,12 +1383,12 @@ end
 -- (only being inside its scenario overrides it); otherwise you being in
 -- it, or its marker on the map.
 function WQ.EventLive(a, isCurrent)
-  if isCurrent and MatchesEvent(a, ScenarioName()) then ns.eventSeenAt[a.key] = GetTime(); return "scenario" end
+  if isCurrent and MatchesEvent(a, ScenarioName()) then return "scenario" end
   local sc = WQ.SchedFor(a)
   if sc then return sc.ongoing and "events tab" or nil end
   if isCurrent then
     for _, t in ipairs(TasksHere()) do
-      if MatchesEvent(a, t.title) then ns.eventSeenAt[a.key] = GetTime(); return "objective" end
+      if MatchesEvent(a, t.title) then return "objective" end
     end
   end
   local ev = ns.DB.eventPOIs and ns.DB.eventPOIs[a.key]

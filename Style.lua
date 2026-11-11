@@ -55,6 +55,97 @@ function Style.TitleBar(f, text)
   return bar, icon, title
 end
 
+-- A movable window in the common look: frame, title bar and close button,
+-- dragged with the left button and its position kept in posTable[posKey].
+--   o = { name, title, w, h, strata, posTable, posKey,
+--         default = { point, relPoint, x, y },  -- before it was ever moved
+--         locked = function() end,              -- true: can't be dragged
+--         onClose = function() end,             -- default: hide it
+--         escape = true }                       -- Esc closes it
+-- Returns the frame, its close button and its title font string.
+function Style.MovableWindow(o)
+  local f = CreateFrame("Frame", o.name, UIParent, "BackdropTemplate")
+  f:SetSize(o.w, o.h or 80)
+  f:SetFrameStrata(o.strata or "MEDIUM")
+  f:SetClampedToScreen(true)
+  f:SetMovable(true)
+  f:EnableMouse(true)
+  f:RegisterForDrag("LeftButton")
+  f:SetScript("OnDragStart", function(fr) if not (o.locked and o.locked()) then fr:StartMoving() end end)
+  f:SetScript("OnDragStop", function(fr)
+    fr:StopMovingOrSizing()
+    local point, _, rel, x, y = fr:GetPoint()
+    o.posTable[o.posKey] = { point, rel, x, y }
+  end)
+  local pos = o.posTable[o.posKey] or o.default
+  f:SetPoint(pos[1], UIParent, pos[2], pos[3], pos[4])
+  Style.Window(f)
+  local _, _, title = Style.TitleBar(f, o.title)
+  local close = Style.Close(f, o.onClose or function() f:Hide() end)
+  if o.escape and o.name then tinsert(UISpecialFrames, o.name) end
+  return f, close, title
+end
+
+-- Secure "Use" button that casts a window's suggested hearthstone /
+-- teleport (set its "macrotext"). Parented to UIParent, not the window, so
+-- the window can still move, resize and hide in combat; it is hidden and
+-- detached when the window hides (and must be when combat starts).
+-- tooltip(button, GameTooltip) fills its tooltip.
+function Style.UseButton(owner, name, w, text, tooltip)
+  local b = Style.Button(UIParent, w, text, nil, "SecureActionButtonTemplate", name)
+  b:RegisterForClicks("AnyUp", "AnyDown")
+  b:SetAttribute("type", "macro")
+  b:SetFrameStrata(owner:GetFrameStrata())
+  b:Hide()
+  b:HookScript("OnEnter", function(s)
+    GameTooltip:SetOwner(s, "ANCHOR_RIGHT")
+    tooltip(s, GameTooltip)
+    GameTooltip:Show()
+  end)
+  b:HookScript("OnLeave", function() GameTooltip:Hide() end)
+  owner:HookScript("OnHide", function()
+    if not (InCombatLockdown and InCombatLockdown()) then b:Hide(); b:ClearAllPoints() end
+  end)
+  return b
+end
+
+-- Flat tabs, the selected one lit up with an accent edge (the dashboard's
+-- tabs and Setup's sub-tabs). A group knows which tab is selected:
+--   local g = Style.TabGroup(function() return selectedKey end)
+--   Style.Tab(g, parent, key, w, h, font, onClick); Style.StyleTabs(g)
+function Style.TabGroup(current) return { current = current, buttons = {} } end
+
+function Style.StyleTabs(group)
+  local cur = group.current()
+  for key, b in pairs(group.buttons) do
+    local on = key == cur
+    b.bg:SetColorTexture(G[1], G[2], G[3], on and 0.18 or 0.04)
+    b.edge:SetShown(on)
+    b.text:SetTextColor(on and 1 or 0.75, on and 1 or 0.65, on and 1 or 0.4)
+  end
+end
+
+-- key is also the tab's label.
+function Style.Tab(group, parent, key, w, h, font, onClick)
+  local b = CreateFrame("Button", nil, parent)
+  b:SetSize(w, h)
+  b.bg = b:CreateTexture(nil, "BACKGROUND")
+  b.bg:SetAllPoints()
+  b.edge = b:CreateTexture(nil, "ARTWORK")
+  b.edge:SetPoint("BOTTOMLEFT")
+  b.edge:SetPoint("BOTTOMRIGHT")
+  b.edge:SetHeight(2)
+  b.edge:SetColorTexture(Style.ACCENT[1], Style.ACCENT[2], Style.ACCENT[3], 1)
+  b.text = b:CreateFontString(nil, "OVERLAY", font or "GameFontNormal")
+  b.text:SetPoint("CENTER", 0, 1)
+  b.text:SetText(key)
+  b:SetScript("OnEnter", function(s) if group.current() ~= key then s.bg:SetColorTexture(1, 1, 1, 0.10) end end)
+  b:SetScript("OnLeave", function() Style.StyleTabs(group) end)
+  b:SetScript("OnClick", onClick)
+  group.buttons[key] = b
+  return b
+end
+
 -- Small framed square with a glyph (Media\close, Media\refresh...):
 -- brighter on hover, the glyph shifts a pixel while pressed.
 local function GlyphButton(parent, glyph, size, hoverTint)
@@ -126,10 +217,19 @@ function Style.Button(parent, w, text, onClick, template, name)
   fs:SetPoint("CENTER", 0, 0)
   b:SetFontString(fs)
   b:SetText(text or "")
-  b:HookScript("OnEnter", function(s) s.bg:SetColorTexture(G[1], G[2], G[3], 0.24) end)
-  b:HookScript("OnLeave", function(s) s.bg:SetColorTexture(G[1], G[2], G[3], 0.12) end)
+  b:HookScript("OnEnter", function(s) s.bg:SetColorTexture(G[1], G[2], G[3], s.active and 0.36 or 0.24) end)
+  b:HookScript("OnLeave", function(s) s.bg:SetColorTexture(G[1], G[2], G[3], s.active and 0.28 or 0.12) end)
   if onClick then b:SetScript("OnClick", onClick) end
   return b
+end
+
+-- Lit-up look for a button whose window is open (brighter fill, gold edge).
+function Style.SetActive(b, on)
+  on = on and true or false
+  if b.active == on then return end
+  b.active = on
+  b.bg:SetColorTexture(G[1], G[2], G[3], on and 0.28 or 0.12)
+  b.edge:SetColorTexture(G[1], G[2], G[3], on and 1 or 0.4)
 end
 
 -- "Label: value v" dropdown: a faint box with a down arrow.

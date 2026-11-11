@@ -215,17 +215,23 @@ local function ToyOption(id, dest)
     note = cd > 0 and ("ready in " .. ns.Duration(cd)) or nil, label = name .. " » " .. (dest.zone or "?") }
 end
 
+-- The learned hearthstone destination is out of date: the bind location
+-- changed since (use it once to relearn).
+local function HearthStale(c)
+  local bind = GetBindLocation and GetBindLocation()
+  return (c.hearth.stale or (bind and c.hearth.bind and bind ~= c.hearth.bind)) and true or false
+end
+
 -- Every teleport this character could use, available or not.
 function Travel.Teleports()
   local out = {}
   local c = ns.GetChar()
-  local bind = GetBindLocation and GetBindLocation()
   if c.hearth then
     local id, cd = UsableHearth()
-    local stale = c.hearth.stale or (bind and c.hearth.bind and bind ~= c.hearth.bind) or false
+    local stale = HearthStale(c)
     out[#out + 1] = {
       key = "hearth", kind = "item", name = "Hearthstone", itemID = id or 6948,
-      dest = c.hearth, cast = 10, cooldown = cd or 0, ready = id ~= nil and not stale,
+      dest = c.hearth, cast = 10, cooldown = cd or 0, ready = id ~= nil and not stale, stale = stale,
       note = stale and "bind location changed — use it once to relearn" or (not id and cd and ("ready in " .. ns.Duration(cd))) or nil,
       label = "Hearthstone » " .. (c.hearth.zone or "?"),
     }
@@ -356,6 +362,36 @@ local function ItemForSpell(sid)
   end
 end
 
+-- Was this item's own use spell among the casts just before the jump? (A
+-- toy's teleport can come with a second instant spell, so not only the
+-- best-scored cast.)
+local function ItemSpellCast(id)
+  if not (id and C_Item and C_Item.GetItemSpell) then return false end
+  local _, s = C_Item.GetItemSpell(id)
+  if not s then return false end
+  for _, cst in ipairs(casts) do
+    if cst.spellID == s then return true end
+  end
+  return false
+end
+
+-- Equipped gear (trinkets, rings, cloaks...), by its item ID; and the gear
+-- slots teleports come in (Kirin Tor rings, guild cloaks and tabards...).
+local TELEPORT_GEAR = { INVTYPE_FINGER = true, INVTYPE_CLOAK = true, INVTYPE_NECK = true, INVTYPE_TABARD = true }
+local function EquipLoc(id)
+  if not (id and C_Item and C_Item.GetItemInfoInstant) then return nil end
+  local loc = select(4, C_Item.GetItemInfoInstant(id))
+  if loc == "" or loc == "INVTYPE_NON_EQUIP_IGNORE" then return nil end
+  return loc
+end
+local function IsGear(id) return EquipLoc(id) ~= nil end
+-- Could this item be a teleport? Not trinkets, weapons or armour: an
+-- on-use trinket cast just before a teleport isn't one.
+local function CanTeleport(id)
+  local loc = EquipLoc(id)
+  return not loc or TELEPORT_GEAR[loc] or false
+end
+
 local function StoreTele(key, t, label)
   local old = D().tele[key]
   D().tele[key] = t
@@ -475,8 +511,12 @@ local function OnJump(from, to, loaded)
     StoreTele("spell:" .. sid, t, t.name or tostring(sid))
     CleanPortals()
   elseif sid and (casted or (lastItem and lastItem.t >= lc.t - 20 and lastItem.t <= lc.t + 1)) then
-    local itemID = (lastItem and lastItem.t >= lc.t - 20 and lastItem.t <= lc.t + 1 and lastItem.id) or ItemForSpell(sid)
-    if itemID then
+    -- the item used just before only counts if its own spell was cast
+    -- (equipping a trinket from the bags also "uses" it)
+    local recent = lastItem and lastItem.t >= lc.t - 20 and lastItem.t <= lc.t + 1
+      and ItemSpellCast(lastItem.id) and lastItem.id
+    local itemID = recent or ItemForSpell(sid)
+    if itemID and CanTeleport(itemID) then
       local t = Point(to)
       t.kind, t.id = "item", itemID
       StoreTele("item:" .. itemID, t, ItemName(itemID))
@@ -493,9 +533,63 @@ end
 
 function Travel.DeletePortal(i)
   local p = i and D().portals[i]
-  if not p then ns.Print("No portal link with that number (see /gc travel).") return end
+  if not p then ns.Print("No portal link with that number (see /gc travel list).") return end
   table.remove(D().portals, i)
   ns.Print(string.format("Removed travel link %s » %s.", p.from.zone or "?", p.to.zone or "?"))
+  ns.Refresh()
+end
+
+-- Everything learned, for the Learned travel window: { kind = "hearth" |
+-- "tele" | "portal", label, note, point (where it goes), key / portal }.
+-- The built-in portals and toys aren't listed (nothing to remove).
+function Travel.Learned()
+  local out = {}
+  local c = ns.GetChar()
+  if c.hearth then
+    out[#out + 1] = { kind = "hearth", label = "Hearthstone » " .. (c.hearth.zone or "?"), point = c.hearth,
+      note = HearthStale(c) and "bind location changed" or nil }
+  end
+  local keys = {}
+  for key in pairs(D().tele) do keys[#keys + 1] = key end
+  table.sort(keys)
+  for _, key in ipairs(keys) do
+    local t = D().tele[key]
+    local name, have
+    if t.kind == "spell" then
+      name = (C_Spell.GetSpellName and C_Spell.GetSpellName(t.id)) or t.name
+      have = KnowsSpell(t.id)
+    else
+      name = t.id and ItemName(t.id)
+      have = t.id and OwnsItem(t.id)
+    end
+    out[#out + 1] = { kind = "tele", key = key, label = (name or key) .. " » " .. (t.zone or "?"), point = t,
+      note = not have and "not on this character" or nil }
+  end
+  for _, p in ipairs(D().portals) do
+    out[#out + 1] = { kind = "portal", portal = p, point = p.to,
+      label = string.format("%s (%.0f, %.0f) » %s", p.from.zone or "?", (p.from.mx or 0) * 100, (p.from.my or 0) * 100, p.to.zone or "?"),
+      note = "used " .. (p.uses or 1) .. "x" }
+  end
+  return out
+end
+
+-- Removes one entry of Travel.Learned(). It's learned again if you take it again.
+function Travel.Remove(e)
+  if e.kind == "portal" then
+    -- by the link itself: links can be tidied away (shifting the numbers)
+    -- between showing the list and the click
+    for i, p in ipairs(D().portals) do
+      if p == e.portal then Travel.DeletePortal(i) return end
+    end
+    return
+  end
+  if e.kind == "hearth" then
+    ns.GetChar().hearth = nil
+    ns.Print("Forgot the Hearthstone destination on this character. It's learned again the next time you use it.")
+  elseif e.kind == "tele" then
+    D().tele[e.key] = nil
+    ns.Print("Forgot teleport " .. e.label .. ".")
+  end
   ns.Refresh()
 end
 
@@ -689,7 +783,9 @@ end
 
 local nodeP, nodeK, nodeR, nodeDist, nodePrev, nodeDone = {}, {}, {}, {}, {}, {}
 
-function Travel.Plan(goal, start)
+-- cooling: also use teleports that are only waiting on their cooldown (to
+-- show what would be used once it's ready).
+function Travel.Plan(goal, start, cooling)
   start = start or Travel.Sample()
   if not start then return nil, "Your position isn't available here." end
   if not goal then return nil, "Track a world quest (click it) or set a map pin." end
@@ -706,7 +802,7 @@ function Travel.Plan(goal, start)
 
   -- teleports usable now: start -> destination
   for _, t in ipairs(Travel.Teleports()) do
-    if t.ready then node(t.dest, "tele", t) end
+    if t.ready or (cooling and (t.cooldown or 0) > 0 and not t.stale) then node(t.dest, "tele", t) end
   end
   -- learned portals, plus the built-in ones you haven't taken yourself
   -- (entrance node, then its exit node)
@@ -838,6 +934,22 @@ function Travel.Init()
   BuildHearthSpells()
   C_Timer.After(10, BuildHearthSpells) -- toy item data loads lazily
   ns.DB.migrated = ns.DB.migrated or {}
+  -- Gear learned as a teleport because it was equipped from the bags just
+  -- before one (before 1.4.0): forget it once. A real teleport ring or
+  -- cloak is learned again the next time it's used.
+  if not ns.DB.migrated.gearTeleports then
+    local removed = {}
+    for key, t in pairs(D().tele) do
+      if t.kind == "item" and t.id and IsGear(t.id) then -- (rings and cloaks too: real ones come back)
+        D().tele[key] = nil
+        removed[#removed + 1] = ItemName(t.id)
+      end
+    end
+    if #removed > 0 then
+      ns.Print("Forgot teleports that were really equipped gear: " .. table.concat(removed, ", ") .. ".")
+    end
+    ns.DB.migrated.gearTeleports = true
+  end
   -- (again once the built-in toys exist: old "portals" that were the Arcantina key)
   if not ns.DB.migrated.cleanPortals2 then
     C_Timer.After(12, function() CleanPortals(); ns.DB.migrated.cleanPortals, ns.DB.migrated.cleanPortals2 = true, true end)

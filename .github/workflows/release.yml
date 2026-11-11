@@ -12,7 +12,11 @@ on:
       - "v*"
 
 jobs:
+  check:
+    uses: ./.github/workflows/check.yml
+
   release:
+    needs: check # only package code that compiles
     runs-on: ubuntu-latest
     permissions:
       contents: write # create the GitHub release

@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.4.0
+
+### New
+- Compact tracker: an optional **hearthstone / teleport button** at the bottom (Setup > Windows, off by default). It shows while the World Quest Tracker is closed and uses the same hearthstone or teleport its directions would suggest. When that one is on cooldown, the button is greyed out and counts down until it's ready.
+- **Key bindings** in their own **Gold Circuit** section of Options > Keybindings: use the hearthstone / teleport (works even while its button is hidden), and open or close the dashboard, Compact Tracker, World Quest Tracker and caches pop-up. Setup > Windows > **Set keys** opens them and shows the hearthstone key.
+- Dashboard: a **Compact Tracker** button next to World Quest Tracker. Both light up while their window is open.
+- **Caches pop-up**: lists every cache, bag and box in your bags that can be opened, with Gold Circuit's weekly caches first. Click a row to open one. It pops up when something openable lands in your bags (not in combat), closes when nothing is left, and Esc closes it. Open it any time with the dashboard's **Caches** button (it shows how many there are) or `/gc open`. Right-click an item to never show it there again. Setup > Windows turns the automatic pop-up off and brings hidden items back.
+- **Learned travel window**: the hearthstone, teleports and portal links the addon has learned, each with a **Remove** button, so a wrong one is easy to get rid of. Hover a row for where it goes; click a portal link to pin its entrance on the map. Open it with `/gc travel` or Setup > World quests & travel > **Show list** (`/gc travel list` still prints it in chat).
+- **Learned quest IDs window**: which quests count for each activity, with a **Remove** button for one that was matched to the wrong activity. A removed quest isn't learned again, and it's listed under Removed with a **Restore** button. Open it with `/gc ids` or Setup > Activities > **Show quest IDs** (`/gc ids list` still prints them in chat).
+- **Trackers** options (Setup > Windows): **Hide in combat** hides the Compact Tracker and World Quest Tracker while you fight, and **Fade** makes them see-through while the mouse isn't over them (opacity is adjustable, 40% by default). Both are off by default.
+
+### Changes
+- The suggested hearthstone / teleport updates as soon as you track a quest or set a map pin, and every few seconds while you move.
+- **Setup is split into sub-tabs**: Activities, Windows, World quests & travel, and Crafting orders. The last one you used is remembered.
+- Setup: chat messages and the level filter moved to a new General section on the Windows sub-tab. The new options explain themselves when you hover them, and the hearthstone / teleport option is greyed out while the Compact Tracker is off.
+
+### Fixes
+- Navigation: equipping a trinket or other gear from your bags just before taking a teleport no longer teaches it as a teleport (it suggested "Use Effigy of Ula'tek's Faithful » Silvermoon City"). An item now only counts if its own spell was cast, and trinkets, weapons and armour never count. Gear learned this way is forgotten on login; a real teleport ring or cloak is learned again the next time you use it.
+- Aqir: quests turned in during or just after an event (such as a nearby Special Assignment's "Tomes of Terror") no longer mark Aqir done or get learned as Aqir quests. Taking part without getting the reward (for example when the other faction tags the boss) no longer counts either. Aqir is done when you get the reward itself. Quests learned this way are forgotten on login, and the "done" and gold they gave are taken back.
+
 ## 1.3.1
 
 ### Fixes

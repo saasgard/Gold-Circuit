@@ -34,26 +34,13 @@ function Win:Create()
   if s.shown == nil then s.shown = false end
   s.sort = s.sort or "gold"
 
-  local f = CreateFrame("Frame", "GoldCircuitWQFrame", UIParent, "BackdropTemplate")
+  local f, close, title = St.MovableWindow({
+    name = "GoldCircuitWQFrame", title = "Gold World Quests", w = WIDTH, h = 120,
+    posTable = s, posKey = "pos", default = { "RIGHT", "RIGHT", -320, 0 },
+    locked = function() return s.locked end, onClose = function() Win:Toggle(false) end,
+  })
   self.frame = f
-  f:SetSize(WIDTH, 120)
-  f:SetFrameStrata("MEDIUM")
-  f:SetClampedToScreen(true)
-  f:SetMovable(true)
-  f:EnableMouse(true)
-  f:RegisterForDrag("LeftButton")
-  f:SetScript("OnDragStart", function(fr) if not s.locked then fr:StartMoving() end end)
-  f:SetScript("OnDragStop", function(fr)
-    fr:StopMovingOrSizing()
-    local point, _, rel, x, y = fr:GetPoint()
-    s.pos = { point, rel, x, y }
-  end)
-  if s.pos then f:SetPoint(s.pos[1], UIParent, s.pos[2], s.pos[3], s.pos[4])
-  else f:SetPoint("RIGHT", UIParent, "RIGHT", -320, 0) end
-  St.Window(f)
-  local _, _, title = St.TitleBar(f, "Gold World Quests")
   self.title = title
-  local close = St.Close(f, function() Win:Toggle(false) end)
   local scan = St.IconButton(f, "refresh", "Rescan the map for world quests", function() ns.WQ.Scan() end)
   scan:SetPoint("RIGHT", close, "LEFT", -4, 0)
 
@@ -136,6 +123,9 @@ function Win:Create()
       Win:Update()
     end
   end)
+  -- fades while the mouse isn't over it (Setup > Windows > Trackers)
+  -- (the Use button sits outside it on UIParent; its other buttons fade along as children)
+  ns.UI.AttachFade(f, { self.useButton })
 end
 
 local function RowTooltip(self)
@@ -387,31 +377,36 @@ function Win:CreateNav()
   pin:Hide()
   self.pinButton = pin
 
-  -- secure button: casts the suggested hearthstone / teleport.
-  -- Parented to UIParent (not this window) so the window can still move and
-  -- resize in combat; it is detached and hidden whenever combat starts.
-  local use = St.Button(UIParent, 76, "Use", nil, "SecureActionButtonTemplate", "GoldCircuitTravelButton")
-  use:RegisterForClicks("AnyUp", "AnyDown")
-  use:SetAttribute("type", "macro")
-  use:SetFrameStrata(f:GetFrameStrata())
-  use:Hide()
-  use:HookScript("OnEnter", function(b)
-    GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
-    GameTooltip:AddLine(b.label or "Use", 1, 0.82, 0)
-    GameTooltip:AddLine("Casts it for you.", 0.7, 0.7, 0.7)
-    GameTooltip:Show()
+  -- secure button: casts the suggested hearthstone / teleport
+  self.useButton = St.UseButton(f, "GoldCircuitTravelButton", 76, "Use", function(b, tt)
+    tt:AddLine(b.label or "Use", 1, 0.82, 0)
+    tt:AddLine("Casts it for you.", 0.7, 0.7, 0.7)
   end)
-  use:HookScript("OnLeave", function() GameTooltip:Hide() end)
-  self.useButton = use
-  f:HookScript("OnHide", function()
-    if not (InCombatLockdown and InCombatLockdown()) then use:Hide(); use:ClearAllPoints() end
-  end)
+  f:HookScript("OnHide", function() ns.Refresh() end) -- the compact tracker may take over the button
+  f:HookScript("OnShow", function() ns.Refresh() end)
 end
 
 local function MacroFor(t)
   if t.kind == "spell" then return "/cast " .. (t.name or "") end
   local name = C_Item and C_Item.GetItemNameByID and C_Item.GetItemNameByID(t.itemID)
   return "/use " .. (name or ("item:" .. t.itemID))
+end
+Win.MacroFor = MacroFor
+
+-- The hearthstone / teleport the directions would start with right now, if
+-- any (the same pick as the "Use" button here). The compact tracker shows
+-- it while this window is closed. When none is ready, returns the one that
+-- would be used once its cooldown is over, with true as the second value.
+function Win.SuggestedTele()
+  if not ns.DB.settings.travel.enabled then return end
+  local goal, start = ns.Travel.Goal(), ns.Travel.Sample()
+  if not (goal and start) then return end
+  local plan = ns.Travel.Plan(goal, start)
+  local first = plan and plan.reachable and plan.steps[1]
+  if first and first.kind == "tele" then return first.tele, false end
+  plan = ns.Travel.Plan(goal, start, true)
+  first = plan and plan.reachable and plan.steps[1]
+  if first and first.kind == "tele" and not first.tele.ready then return first.tele, true end
 end
 
 function Win:SetUse(tele, anchorY)
@@ -435,7 +430,16 @@ function Win:OnCombat(inCombat)
     -- PLAYER_REGEN_DISABLED fires just before lockdown: last chance to detach
     self.useButton:Hide()
     self.useButton:ClearAllPoints()
+    -- Setup > Windows > Trackers: hidden until combat ends (still "shown")
+    if ns.DB.settings.windows.hideInCombat and self.frame and self.frame:IsShown() then
+      self.combatHidden = true
+      self.frame:Hide()
+    end
   else
+    if self.combatHidden then
+      self.combatHidden = nil
+      if S().shown and self.frame then self.frame:Show() end
+    end
     self:Update()
   end
 end
