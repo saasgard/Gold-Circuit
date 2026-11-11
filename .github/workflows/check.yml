@@ -12,10 +12,16 @@ on:
 jobs:
   lua-syntax:
     runs-on: ubuntu-latest
+    timeout-minutes: 8
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+      # (Ubuntu's package servers are sometimes unreachable from the runner:
+      # retry the downloads, and give up after a few minutes instead of ten)
       - name: Install Lua 5.1
-        run: sudo apt-get update && sudo apt-get install -y lua5.1
+        timeout-minutes: 5
+        run: |
+          sudo apt-get -o Acquire::Retries=5 update || true
+          sudo apt-get -o Acquire::Retries=5 install -y lua5.1
       - name: Compile every Lua file
         run: |
           status=0
