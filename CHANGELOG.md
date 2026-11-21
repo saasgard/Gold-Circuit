@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.1
+
+### Fixes
+- Travel: the teleport list no longer causes a Lua error in combat. Since patch 12.0.5 the game hides spell cooldowns from addons while you fight; the addon now skips them until combat ends.
+
+### Changes
+- Marked as up to date for patch 12.1.7.
+
 ## 1.4.0
 
 ### New
