@@ -1,4 +1,4 @@
-## Interface: 120105
+## Interface: 120105, 120107
 ## Title: Gold Circuit
 ## Notes: Weekly caches, world quests, Special Assignments, events and crafting orders tracked across your whole alt army, with route planning, navigation and a cashflow ledger.
 ## Author: Skeide
