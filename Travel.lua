@@ -104,6 +104,8 @@ end
 local function SpellCooldown(id)
   if not (C_Spell and C_Spell.GetSpellCooldown) then return 0 end
   local cd = C_Spell.GetSpellCooldown(id)
+  -- cooldowns come back secret while restricted (combat); comparing them would error
+  if cd and issecretvalue and (issecretvalue(cd.startTime) or issecretvalue(cd.duration)) then return 0 end
   if cd and cd.startTime and cd.startTime > 0 and cd.duration and cd.duration > 1.5 then
     return math.max(0, cd.startTime + cd.duration - GetTime())
   end
